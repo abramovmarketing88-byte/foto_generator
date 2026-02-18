@@ -1,0 +1,39 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: foto_generator
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+
+  bot:
+    build: .
+    env_file: .env
+    depends_on:
+      - postgres
+      - redis
+    command: bash -lc "alembic upgrade head && python -m app.bot.main"
+    volumes:
+      - .:/app
+
+  worker:
+    build: .
+    env_file: .env
+    depends_on:
+      - postgres
+      - redis
+    command: bash -lc "alembic upgrade head && arq app.workers.worker.WorkerSettings"
+    volumes:
+      - .:/app
+
+volumes:
+  pgdata:

@@ -1,0 +1,22 @@
+[
+  {
+    "code": "business_portrait_01",
+    "title": "Business Portrait",
+    "description": "Corporate-style portrait with clean background",
+    "width": 1024,
+    "height": 1024,
+    "num_outputs": 4,
+    "cost_credits": 1,
+    "is_active": true
+  },
+  {
+    "code": "street_style_01",
+    "title": "Street Style",
+    "description": "Dynamic urban editorial look",
+    "width": 1024,
+    "height": 1024,
+    "num_outputs": 4,
+    "cost_credits": 1,
+    "is_active": true
+  }
+]
