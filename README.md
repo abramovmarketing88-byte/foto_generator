@@ -61,8 +61,7 @@ README.md
 ## Environment variables
 Required:
 - `TELEGRAM_BOT_TOKEN`
-- `GEMINI_API_KEY`
-- `NANOBANANA_API_KEY`
+- `DATABASE_URL`
 
 Optional (safe defaults):
 - `GEMINI_ANALYSIS_MODEL=gemini-2.0-flash`
@@ -101,13 +100,26 @@ Optional (safe defaults):
    python -m app.bot.main
    ```
 
+
+## Railway deploy checklist
+1. Set required env vars:
+   - `TELEGRAM_BOT_TOKEN`
+   - `DATABASE_URL`
+2. `DATABASE_URL` rewrite behavior:
+   - `postgresql://...` → `postgresql+psycopg://...` at runtime.
+   - `postgres://...` → `postgresql+psycopg://...` at runtime.
+   - URLs already using `+psycopg` are kept unchanged.
+3. Optional values may still be configured via env, but Gemini/NanoBanana keys can be set inside the bot and stored in DB.
+4. Local quick DB smoke test (in-memory SQLite):
+   ```bash
+   TELEGRAM_BOT_TOKEN=dummy DATABASE_URL=sqlite+pysqlite:///:memory: python -m app.bot.main
+   ```
+
 ## Railway deployment notes
 1. Deploy from GitHub repository in Railway.
 2. Add environment variables:
    - `TELEGRAM_BOT_TOKEN`
-   - `GEMINI_API_KEY`
-   - `NANOBANANA_API_KEY`
-   - `DATABASE_URL=sqlite+pysqlite:////data/storage/neurophotoshoot.db`
+   - `DATABASE_URL` (Railway Postgres URL is supported and rewritten to psycopg v3 dialect automatically)
    - `STORAGE_DIR=/data/storage`
    - Optional tuning values for retries/timeouts/models.
 3. Keep persistent volume mounted for `/data/storage`.
