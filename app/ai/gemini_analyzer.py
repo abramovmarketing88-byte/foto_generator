@@ -10,14 +10,14 @@ import httpx
 from PIL import Image
 
 from app.config import Settings
+from app.services.keys import get_api_key
 
 logger = logging.getLogger(__name__)
 
 
 class GeminiAnalyzer:
     def __init__(self, settings: Settings):
-        self._api_key = settings.gemini_api_key
-        self._model = settings.gemini_analysis_model
+        self._model = "gemini-2.0-flash"
         self._retries = settings.gemini_retries
 
     @staticmethod
@@ -29,11 +29,12 @@ class GeminiAnalyzer:
             image.save(output, format="JPEG", quality=85)
             return output.getvalue()
 
-    async def analyze_user_photos(self, face_photos: list[bytes]) -> tuple[str, list[str]]:
+    async def analyze_user_photos(self, user_id: int, face_photos: list[bytes]) -> tuple[str, list[str]]:
         if not face_photos:
             return "", []
 
         optimized = [self._optimize_image(photo) for photo in face_photos]
+        api_key = await get_api_key(user_id, "gemini")
         payload = {
             "contents": [
                 {
@@ -55,10 +56,7 @@ class GeminiAnalyzer:
             ],
             "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json"},
         }
-        url = (
-            f"https://generativelanguage.googleapis.com/v1beta/models/{self._model}:generateContent"
-            f"?key={self._api_key}"
-        )
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self._model}:generateContent?key={api_key}"
 
         last_error: Exception | None = None
         for attempt in range(1, self._retries + 1):

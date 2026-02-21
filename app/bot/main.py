@@ -18,6 +18,7 @@ from app.db import create_session_factory
 from app.logging_setup import setup_logging
 from app.models import Base, PhotoKind
 from app.repo import NeuroPhotoshootRepo
+from app.services.keys import MissingKeyError, configure_keys_service, get_api_key
 from app.storage import LocalStorage
 from app.worker import run_worker
 
@@ -63,6 +64,9 @@ def with_error_handling(func: Callable[..., Coroutine[None, None, T]]) -> Callab
     async def wrapper(event: Message | CallbackQuery, *args, **kwargs):
         try:
             return await func(event, *args, **kwargs)
+        except MissingKeyError:
+            await event.answer("⚠️ API Key not found. Please provide your key using /set_gemini or /set_nanobanana.")
+            return None
         except Exception:
             logger.exception("Handler error")
             if isinstance(event, CallbackQuery):
@@ -172,6 +176,38 @@ async def on_help_cmd(message: Message, app_ctx: AppContext) -> None:
 async def on_help(message: Message, app_ctx: AppContext) -> None:
     _get_user(app_ctx, message.from_user.id)
     await message.answer("Заполните профиль, загрузите минимум 1 фото лица, добавьте сцену и запустите генерацию.")
+
+
+@router.message(Command("set_gemini"))
+@with_error_handling
+async def set_gemini_key(message: Message, app_ctx: AppContext) -> None:
+    if not message.from_user:
+        await message.answer("Пользователь не определен.")
+        return
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip():
+        await message.answer("Использование: /set_gemini <API_KEY>")
+        return
+
+    with app_ctx.session_factory() as session:
+        NeuroPhotoshootRepo(session).upsert_gemini_key(message.from_user.id, parts[1].strip())
+    await message.answer("Gemini API key сохранен.")
+
+
+@router.message(Command("set_nanobanana"))
+@with_error_handling
+async def set_nanobanana_key(message: Message, app_ctx: AppContext) -> None:
+    if not message.from_user:
+        await message.answer("Пользователь не определен.")
+        return
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip():
+        await message.answer("Использование: /set_nanobanana <API_KEY>")
+        return
+
+    with app_ctx.session_factory() as session:
+        NeuroPhotoshootRepo(session).upsert_nanobanana_key(message.from_user.id, parts[1].strip())
+    await message.answer("NanoBanana API key сохранен.")
 
 
 @router.message(F.text == "Профиль")
@@ -385,6 +421,13 @@ async def on_camera_callback(callback: CallbackQuery, app_ctx: AppContext) -> No
 @router.message(F.text == "Генерация")
 @with_error_handling
 async def generate(message: Message, app_ctx: AppContext) -> None:
+    if not message.from_user:
+        await message.answer("Пользователь не определен.")
+        return
+
+    await get_api_key(message.from_user.id, "gemini")
+    await get_api_key(message.from_user.id, "nanobanana")
+
     user_id = _get_user(app_ctx, message.from_user.id)
     with app_ctx.session_factory() as session:
         repo = NeuroPhotoshootRepo(session)
@@ -467,6 +510,7 @@ async def main() -> None:
     storage.ensure_dirs()
 
     session_factory = create_session_factory(settings)
+    configure_keys_service(settings, session_factory)
     with session_factory() as session:
         Base.metadata.create_all(bind=session.bind)
 

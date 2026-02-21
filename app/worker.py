@@ -15,6 +15,7 @@ from app.models import JobStatus, PhotoKind
 from app.prompt_builder import build_final_prompt
 from app.queue import JobQueue
 from app.repo import NeuroPhotoshootRepo
+from app.services.keys import MissingKeyError
 from app.storage import LocalStorage
 
 logger = logging.getLogger(__name__)
@@ -55,7 +56,7 @@ async def _run_job(
     if not ref_bytes:
         raise RuntimeError("reference photos are missing")
 
-    face_signature_text, warnings = await gemini.analyze_user_photos(face_bytes)
+    face_signature_text, warnings = await gemini.analyze_user_photos(user.telegram_user_id, face_bytes)
     if warnings:
         logger.info("Gemini analysis warnings", extra={"job_id": job_id, "warnings_count": len(warnings)})
 
@@ -68,7 +69,7 @@ async def _run_job(
     )
     logger.info("Final prompt built", extra={"job_id": job_id, "prompt": final_prompt})
 
-    image_bytes = await nanobanana.generate_image(final_prompt, ref_bytes, shoot_settings.output_size_code)
+    image_bytes = await nanobanana.generate_image(user.telegram_user_id, final_prompt, ref_bytes, shoot_settings.output_size_code)
 
     result_path = storage.build_result_path(job.user_id, job_id, extension=".jpg")
     result_path.write_bytes(image_bytes)
@@ -125,7 +126,13 @@ async def run_worker(bot: Bot, settings: Settings, session_factory: sessionmaker
                         repo.mark_job_failed(job.id, error_text)
                     user = repo.get_user_by_id(job.user_id)
                 if user:
-                    await bot.send_message(user.telegram_user_id, f"Не удалось выполнить генерацию для задачи #{job.id}. Попробуйте позже.")
+                    if isinstance(exc, MissingKeyError):
+                        await bot.send_message(
+                            user.telegram_user_id,
+                            "⚠️ API Key not found. Please provide your key using /set_gemini or /set_nanobanana.",
+                        )
+                    else:
+                        await bot.send_message(user.telegram_user_id, f"Не удалось выполнить генерацию для задачи #{job.id}. Попробуйте позже.")
                 logger.exception("Job failed", extra={"job_id": job.id, "user_id": job.user_id})
         except Exception:
             logger.exception("Worker loop error")
