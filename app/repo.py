@@ -24,6 +24,9 @@ class NeuroPhotoshootRepo:
         stmt = select(User).where(User.telegram_user_id == telegram_user_id)
         return self.session.scalar(stmt)
 
+    def get_user_by_id(self, user_id: int) -> User | None:
+        return self.session.scalar(select(User).where(User.id == user_id))
+
     def upsert_profile(self, user_id: int, profile_text: str, age: int | None, height_cm: int | None, weight_kg: int | None) -> Profile:
         stmt = select(Profile).where(Profile.user_id == user_id)
         profile = self.session.scalar(stmt)
@@ -51,6 +54,12 @@ class NeuroPhotoshootRepo:
     def count_photos(self, user_id: int, kind: PhotoKind) -> int:
         stmt = select(func.count(PhotoAsset.id)).where(PhotoAsset.user_id == user_id, PhotoAsset.kind == kind)
         return int(self.session.execute(stmt).scalar_one())
+
+    def list_photos(self, user_id: int, kind: PhotoKind | None = None) -> list[PhotoAsset]:
+        stmt = select(PhotoAsset).where(PhotoAsset.user_id == user_id).order_by(PhotoAsset.kind, PhotoAsset.position_index)
+        if kind is not None:
+            stmt = stmt.where(PhotoAsset.kind == kind)
+        return list(self.session.scalars(stmt).all())
 
     def add_photo(self, user_id: int, kind: PhotoKind, file_path: str) -> PhotoAsset:
         next_pos_stmt = select(func.coalesce(func.max(PhotoAsset.position_index), 0)).where(
@@ -107,12 +116,69 @@ class NeuroPhotoshootRepo:
         stmt = select(func.count(Job.id)).where(Job.user_id == user_id, Job.status.in_([JobStatus.QUEUED, JobStatus.RUNNING]))
         return int(self.session.execute(stmt).scalar_one())
 
+    def count_running_jobs(self, user_id: int) -> int:
+        stmt = select(func.count(Job.id)).where(Job.user_id == user_id, Job.status == JobStatus.RUNNING)
+        return int(self.session.execute(stmt).scalar_one())
+
     def create_job(self, user_id: int) -> Job:
         job = Job(user_id=user_id, status=JobStatus.QUEUED)
         self.session.add(job)
         self.session.commit()
         self.session.refresh(job)
         return job
+
+
+    def list_queued_jobs(self, limit: int = 50) -> list[Job]:
+        stmt = select(Job).where(Job.status == JobStatus.QUEUED).order_by(Job.created_at.asc(), Job.id.asc()).limit(limit)
+        return list(self.session.scalars(stmt).all())
+
+    def get_job_by_id(self, job_id: int) -> Job | None:
+        return self.session.scalar(select(Job).where(Job.id == job_id))
+
+    def mark_job_running(self, job_id: int) -> Job | None:
+        job = self.session.scalar(select(Job).where(Job.id == job_id))
+        if not job:
+            return None
+        job.status = JobStatus.RUNNING
+        job.error = None
+        self.session.commit()
+        self.session.refresh(job)
+        return job
+
+    def mark_job_succeeded(self, job_id: int) -> Job | None:
+        job = self.session.scalar(select(Job).where(Job.id == job_id))
+        if not job:
+            return None
+        job.status = JobStatus.SUCCEEDED
+        job.error = None
+        self.session.commit()
+        self.session.refresh(job)
+        return job
+
+    def mark_job_failed(self, job_id: int, error: str) -> Job | None:
+        job = self.session.scalar(select(Job).where(Job.id == job_id))
+        if not job:
+            return None
+        job.status = JobStatus.FAILED
+        job.error = error
+        self.session.commit()
+        self.session.refresh(job)
+        return job
+
+    def fail_running_jobs_on_startup(self, error: str) -> int:
+        jobs = list(self.session.scalars(select(Job).where(Job.status == JobStatus.RUNNING)).all())
+        for job in jobs:
+            job.status = JobStatus.FAILED
+            job.error = error
+        self.session.commit()
+        return len(jobs)
+
+    def create_generation(self, user_id: int, job_id: int, final_prompt: str, result_file_path: str) -> Generation:
+        generation = Generation(user_id=user_id, job_id=job_id, final_prompt=final_prompt, result_file_path=result_file_path)
+        self.session.add(generation)
+        self.session.commit()
+        self.session.refresh(generation)
+        return generation
 
     def get_generations(self, user_id: int, limit: int = 10) -> list[Generation]:
         stmt = select(Generation).where(Generation.user_id == user_id).order_by(Generation.created_at.desc()).limit(limit)

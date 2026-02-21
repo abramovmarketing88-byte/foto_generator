@@ -12,7 +12,16 @@ class Settings(BaseSettings):
 
     telegram_bot_token: str = Field(..., alias="TELEGRAM_BOT_TOKEN")
     gemini_api_key: str = Field(..., alias="GEMINI_API_KEY")
+    gemini_analysis_model: str = Field(default="gemini-2.0-flash", alias="GEMINI_ANALYSIS_MODEL")
+    gemini_retries: int = Field(default=3, alias="GEMINI_RETRIES")
+
     nanobanana_api_key: str = Field(..., alias="NANOBANANA_API_KEY")
+    nanobanana_base_url: str = Field(default="https://api.nanobanana.example", alias="NANOBANANA_BASE_URL")
+    nanobanana_generate_path: str = Field(default="/v1/generate", alias="NANOBANANA_GENERATE_PATH")
+    nanobanana_timeout_sec: int = Field(default=60, alias="NANOBANANA_TIMEOUT_SEC")
+    nanobanana_retries: int = Field(default=5, alias="NANOBANANA_RETRIES")
+
+    job_timeout_sec: int = Field(default=120, alias="JOB_TIMEOUT_SEC")
 
     database_url: str = Field(default="sqlite+pysqlite:///./storage/neurophotoshoot.db", alias="DATABASE_URL")
     storage_dir: str = Field(default="./storage", alias="STORAGE_DIR")
