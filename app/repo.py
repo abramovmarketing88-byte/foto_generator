@@ -3,7 +3,7 @@ from __future__ import annotations
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, aliased
 
-from app.models import Generation, Job, JobStatus, PhotoAsset, PhotoKind, Profile, ScenePrompt, ShootSettings, User
+from app.models import Generation, Job, JobStatus, PhotoAsset, PhotoKind, Profile, ScenePrompt, ShootSettings, User, UserKeys
 
 
 class NeuroPhotoshootRepo:
@@ -215,3 +215,26 @@ class NeuroPhotoshootRepo:
     def get_generation(self, generation_id: int, user_id: int) -> Generation | None:
         stmt = select(Generation).where(Generation.id == generation_id, Generation.user_id == user_id)
         return self.session.scalar(stmt)
+
+    def get_user_keys(self, user_id: int) -> UserKeys | None:
+        return self.session.get(UserKeys, user_id)
+
+    def upsert_gemini_key(self, user_id: int, key: str) -> UserKeys:
+        user_keys = self.get_user_keys(user_id)
+        if user_keys is None:
+            user_keys = UserKeys(user_id=user_id)
+            self.session.add(user_keys)
+        user_keys.gemini_key = key
+        self.session.commit()
+        self.session.refresh(user_keys)
+        return user_keys
+
+    def upsert_nanobanana_key(self, user_id: int, key: str) -> UserKeys:
+        user_keys = self.get_user_keys(user_id)
+        if user_keys is None:
+            user_keys = UserKeys(user_id=user_id)
+            self.session.add(user_keys)
+        user_keys.nanobanana_key = key
+        self.session.commit()
+        self.session.refresh(user_keys)
+        return user_keys

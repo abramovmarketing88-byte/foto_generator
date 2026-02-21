@@ -4,6 +4,7 @@ from datetime import datetime
 from enum import StrEnum
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     DateTime,
     Enum,
@@ -120,3 +121,11 @@ class Generation(Base):
     final_prompt: Mapped[str] = mapped_column(Text, nullable=False)
     result_file_path: Mapped[str] = mapped_column(String(1024), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class UserKeys(Base):
+    __tablename__ = "user_keys"
+
+    user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    gemini_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    nanobanana_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
