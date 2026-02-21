@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from app.models import Generation, Job, JobStatus, PhotoAsset, PhotoKind, Profile, ScenePrompt, ShootSettings, User
 
@@ -144,6 +144,34 @@ class NeuroPhotoshootRepo:
         self.session.commit()
         self.session.refresh(job)
         return job
+
+    def claim_next_queued_job(self, max_running_per_user: int) -> Job | None:
+        queued_job = aliased(Job)
+        running_jobs_for_user = (
+            select(func.count(Job.id))
+            .where(Job.user_id == queued_job.user_id, Job.status == JobStatus.RUNNING)
+            .scalar_subquery()
+        )
+        claim_stmt = (
+            select(queued_job)
+            .where(
+                queued_job.status == JobStatus.QUEUED,
+                running_jobs_for_user < max_running_per_user,
+            )
+            .order_by(queued_job.created_at.asc(), queued_job.id.asc())
+            .limit(1)
+            .with_for_update(skip_locked=True)
+        )
+
+        with self.session.begin():
+            job = self.session.scalar(claim_stmt)
+            if not job:
+                return None
+            job.status = JobStatus.RUNNING
+            job.error = None
+            self.session.flush()
+            self.session.refresh(job)
+            return job
 
     def mark_job_succeeded(self, job_id: int) -> Job | None:
         job = self.session.scalar(select(Job).where(Job.id == job_id))
