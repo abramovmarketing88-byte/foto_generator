@@ -160,7 +160,7 @@ async def _photo_counts(app_ctx: AppContext, user_id: int) -> tuple[int, int]:
 
 @router.message(Command("start"))
 @with_error_handling
-async def on_start(message: Message, app_ctx: AppContext) -> None:
+async def on_start(message: Message, app_ctx: AppContext, **kwargs: object) -> None:
     _get_user(app_ctx, message.from_user.id)
     await message.answer("Добро пожаловать! Выберите раздел:", reply_markup=MAIN_MENU)
 
