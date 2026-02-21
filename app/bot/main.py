@@ -60,19 +60,47 @@ MAIN_MENU = ReplyKeyboardMarkup(
 )
 
 
+def _can_reply(event: Message | CallbackQuery) -> bool:
+    """Check if we can safely reply to this event (has from_user or chat)."""
+    if isinstance(event, CallbackQuery):
+        return event.from_user is not None
+    if isinstance(event, Message):
+        return event.chat is not None
+    return False
+
+
 def with_error_handling(func: Callable[..., Coroutine[None, None, T]]) -> Callable[..., Coroutine[None, None, T | None]]:
     async def wrapper(event: Message | CallbackQuery, *args, **kwargs):
+        # Guard: from_user required for most handlers; fail fast with clear log
+        from_user = getattr(event, "from_user", None)
+        if from_user is None and isinstance(event, (Message, CallbackQuery)):
+            logger.warning("Update missing from_user", extra={"update_id": getattr(event, "update_id", None)})
+            if _can_reply(event):
+                try:
+                    if isinstance(event, CallbackQuery):
+                        await event.answer("Sorry, an internal error occurred.", show_alert=True)
+                    else:
+                        await event.answer("Sorry, an internal error occurred.")
+                except Exception:
+                    logger.exception("Failed to send fallback message")
+            return None
+
         try:
             return await func(event, *args, **kwargs)
         except MissingKeyError:
-            await event.answer("⚠️ API Key not found. Please provide your key using /set_gemini or /set_nanobanana.")
+            if _can_reply(event):
+                await event.answer("⚠️ API Key not found. Please provide your key using /set_gemini or /set_nanobanana.")
             return None
-        except Exception:
-            logger.exception("Handler error")
-            if isinstance(event, CallbackQuery):
-                await event.answer("Произошла ошибка. Попробуйте снова.", show_alert=True)
-            else:
-                await event.answer("Произошла ошибка. Попробуйте снова.")
+        except Exception as e:
+            logger.exception("Handler error: %s", e)
+            if _can_reply(event):
+                try:
+                    if isinstance(event, CallbackQuery):
+                        await event.answer("Sorry, an internal error occurred.", show_alert=True)
+                    else:
+                        await event.answer("Sorry, an internal error occurred.")
+                except Exception:
+                    logger.exception("Failed to send fallback message")
             return None
 
     return wrapper
@@ -393,13 +421,18 @@ async def on_camera_callback(callback: CallbackQuery, app_ctx: AppContext) -> No
         await callback.answer()
         return
     user_id = _get_user(app_ctx, callback.from_user.id)
-    key, value = callback.data.split(":", 1)
+    key, value = (callback.data or "").split(":", 1)
     payload = {}
     if key == "lens":
         if value == "none":
             payload = {"lens_selected": False, "lens_mm": None}
         else:
-            payload = {"lens_selected": True, "lens_mm": int(value)}
+            try:
+                payload = {"lens_selected": True, "lens_mm": int(value)}
+            except ValueError:
+                logger.warning("Invalid lens value in callback", extra={"data": callback.data})
+                await callback.answer("Invalid option", show_alert=True)
+                return
     elif key == "angle":
         payload = {"angle_code": value}
     elif key == "framing":
@@ -467,16 +500,19 @@ async def history(message: Message, app_ctx: AppContext) -> None:
         return
 
     for g in generations:
-        scene_preview = g.final_prompt[:50] + ("..." if len(g.final_prompt) > 50 else "")
+        scene_preview = (g.final_prompt or "")[:50] + ("..." if len(g.final_prompt or "") > 50 else "")
+        lens_str = f"{settings.lens_mm}mm" if (settings.lens_selected and settings.lens_mm is not None) else "не выбрана"
+        angle_str = settings.angle_code or "—"
+        size_str = settings.output_size_code or "—"
         kb = InlineKeyboardMarkup(
             inline_keyboard=[[InlineKeyboardButton(text="Отправить результат", callback_data=f"send_result:{g.id}")]]
         )
         await message.answer(
             f"{g.created_at:%Y-%m-%d %H:%M}\n"
             f"Сцена: {scene_preview}\n"
-            f"Линза: {settings.lens_mm if settings.lens_selected else 'не выбрана'}\n"
-            f"Ракурс: {settings.angle_code}\n"
-            f"Размер: {settings.output_size_code}",
+            f"Линза: {lens_str}\n"
+            f"Ракурс: {angle_str}\n"
+            f"Размер: {size_str}",
             reply_markup=kb,
         )
 
@@ -485,7 +521,17 @@ async def history(message: Message, app_ctx: AppContext) -> None:
 @with_error_handling
 async def send_result(callback: CallbackQuery, app_ctx: AppContext, bot: Bot) -> None:
     user_id = _get_user(app_ctx, callback.from_user.id)
-    generation_id = int(callback.data.split(":", 1)[1])
+    parts = (callback.data or "").split(":", 1)
+    if len(parts) < 2 or not parts[1].strip():
+        logger.warning("Invalid send_result callback_data", extra={"data": callback.data})
+        await callback.answer("Invalid request", show_alert=True)
+        return
+    try:
+        generation_id = int(parts[1].strip())
+    except ValueError:
+        logger.warning("Invalid generation_id in callback", extra={"data": callback.data})
+        await callback.answer("Invalid request", show_alert=True)
+        return
     with app_ctx.session_factory() as session:
         generation = NeuroPhotoshootRepo(session).get_generation(generation_id, user_id)
     if not generation:
@@ -516,7 +562,10 @@ async def main() -> None:
 
     app_ctx = AppContext(settings=settings, session_factory=session_factory, storage=storage)
 
-    bot = Bot(settings.telegram_bot_token)
+    token = settings.telegram_bot_token
+    logger.info("Bot started using token ending in: ...%s", token[-5:] if len(token) >= 5 else "?????")
+    # Single bot instance, long polling only (no webhook). No conflicting update receivers.
+    bot = Bot(token)
     dp = Dispatcher()
     dp.include_router(router)
     dp["app_ctx"] = app_ctx
