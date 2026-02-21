@@ -16,9 +16,4 @@ class JobQueue:
 
     def pop_next_job(self, max_running_per_user: int) -> Job | None:
         with self._session_factory() as session:
-            repo = NeuroPhotoshootRepo(session)
-            for job in repo.list_queued_jobs(limit=50):
-                if repo.count_running_jobs(job.user_id) >= max_running_per_user:
-                    continue
-                return repo.mark_job_running(job.id)
-            return None
+            return NeuroPhotoshootRepo(session).claim_next_queued_job(max_running_per_user)
