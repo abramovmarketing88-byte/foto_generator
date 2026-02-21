@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+import asyncio
 from pathlib import Path
 from typing import Callable, Coroutine, TypeVar
 
@@ -18,6 +19,7 @@ from app.logging_setup import setup_logging
 from app.models import Base, PhotoKind
 from app.repo import NeuroPhotoshootRepo
 from app.storage import LocalStorage
+from app.worker import run_worker
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -405,7 +407,7 @@ async def generate(message: Message, app_ctx: AppContext) -> None:
 
         job = repo.create_job(user_id)
 
-    await message.answer(f"Задача #{job.id} создана со статусом QUEUED.")
+    await message.answer(f"Задача #{job.id} поставлена в очередь. Job queued.")
 
 
 @router.message(F.text == "История")
@@ -475,8 +477,19 @@ async def main() -> None:
     dp.include_router(router)
     dp["app_ctx"] = app_ctx
 
+    stop_event = asyncio.Event()
+    worker_task = asyncio.create_task(run_worker(bot, settings, session_factory, storage, stop_event))
+
     logger.info("Starting bot polling")
-    await dp.start_polling(bot)
+    try:
+        await dp.start_polling(bot)
+    finally:
+        stop_event.set()
+        worker_task.cancel()
+        try:
+            await worker_task
+        except asyncio.CancelledError:
+            logger.info("Worker task cancelled")
 
 
 if __name__ == "__main__":
