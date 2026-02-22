@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import re
 import asyncio
+import inspect
 from pathlib import Path
 from typing import Callable, Coroutine, TypeVar
 
@@ -70,11 +71,35 @@ def _can_reply(event: Message | CallbackQuery) -> bool:
 
 
 def with_error_handling(func: Callable[..., Coroutine[None, None, T]]) -> Callable[..., Coroutine[None, None, T | None]]:
+    signature = inspect.signature(func)
+    accepted_kwargs = {
+        name for name, parameter in signature.parameters.items() if parameter.kind in (inspect.Parameter.KEYWORD_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    }
+
+    def build_context(event: Message | CallbackQuery, kwargs: dict[str, object]) -> dict[str, object]:
+        context: dict[str, object] = {
+            "handler": func.__name__,
+            "update_type": type(event).__name__,
+            "user_id": getattr(getattr(event, "from_user", None), "id", None),
+            "chat_id": getattr(getattr(event, "chat", None), "id", None),
+        }
+        if isinstance(event, Message):
+            context["event_data"] = event.text or event.caption or ""
+        elif isinstance(event, CallbackQuery):
+            context["event_data"] = event.data or ""
+            context["chat_id"] = context["chat_id"] or getattr(getattr(event.message, "chat", None), "id", None)
+
+        dropped_kwargs = sorted(set(kwargs) - accepted_kwargs - {"dispatcher"})
+        if dropped_kwargs:
+            context["dropped_kwargs"] = dropped_kwargs
+        return context
+
     async def wrapper(event: Message | CallbackQuery, *args, **kwargs):
+        context = build_context(event, kwargs)
         # Guard: from_user required for most handlers; fail fast with clear log
         from_user = getattr(event, "from_user", None)
         if from_user is None and isinstance(event, (Message, CallbackQuery)):
-            logger.warning("Update missing from_user", extra={"update_id": getattr(event, "update_id", None)})
+            logger.warning("Update missing from_user | context=%s", context)
             if _can_reply(event):
                 try:
                     if isinstance(event, CallbackQuery):
@@ -87,13 +112,15 @@ def with_error_handling(func: Callable[..., Coroutine[None, None, T]]) -> Callab
 
         try:
             kwargs.pop("dispatcher", None)  # aiogram passes it; handlers don't expect it
-            return await func(event, *args, **kwargs)
+            filtered_kwargs = {key: value for key, value in kwargs.items() if key in accepted_kwargs}
+            return await func(event, *args, **filtered_kwargs)
         except MissingKeyError:
+            logger.warning("Missing API key for handler | context=%s", context)
             if _can_reply(event):
                 await event.answer("⚠️ API Key not found. Please provide your key using /set_gemini or /set_nanobanana.")
             return None
-        except Exception as e:
-            logger.exception("Handler error: %s", e)
+        except Exception:
+            logger.exception("Handler error | context=%s", context)
             if _can_reply(event):
                 try:
                     if isinstance(event, CallbackQuery):

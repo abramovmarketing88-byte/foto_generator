@@ -101,6 +101,15 @@ Optional (safe defaults):
    ```
 
 
+
+## Menu handler smoke check
+Use this to verify router/dispatcher registration and catch startup-level menu wiring issues:
+```bash
+python -m app.tools.smoke_menu
+```
+
+To reproduce the detailed runtime logs for menu button failures, run the bot and press any menu button. Handler exceptions are logged with handler name, update type, user/chat ids, and message text/callback data.
+
 ## Railway deploy checklist
 1. Set required env vars:
    - `TELEGRAM_BOT_TOKEN`
