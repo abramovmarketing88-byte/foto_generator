@@ -71,7 +71,7 @@ async def _run_job(
         logger.info("Gemini analysis warnings", extra={"job_id": job_id, "warnings_count": len(warnings)})
 
     final_prompt = build_final_prompt(
-        profile_text=profile.profile_text,
+        profile=profile,
         scene_text=scene.scene_text,
         shoot_settings=shoot_settings,
         face_signature_text=face_signature_text,
@@ -118,7 +118,22 @@ async def run_worker(bot: Bot, settings: Settings, session_factory: sessionmaker
                 continue
 
             with session_factory() as session:
-                user = NeuroPhotoshootRepo(session).get_user_by_id(job.user_id)
+                repo = NeuroPhotoshootRepo(session)
+                user = repo.get_user_by_id(job.user_id)
+                photos = repo.list_photos(job.user_id)
+            if not user or not photos:
+                with session_factory() as session:
+                    NeuroPhotoshootRepo(session).mark_job_failed(job.id, "no user or photos")
+                continue
+            missing = [p.file_path for p in photos if not Path(p.file_path).exists()]
+            if missing:
+                with session_factory() as session:
+                    NeuroPhotoshootRepo(session).mark_job_failed(job.id, "reference photos missing on disk")
+                await bot.send_message(
+                    user.telegram_user_id,
+                    "⚠️ Фото недоступны на сервере (возможно, перезапуск). Загрузите фото заново в меню «Фото».",
+                )
+                continue
             if user:
                 await bot.send_message(user.telegram_user_id, f"Задача #{job.id}: генерация началась.")
 

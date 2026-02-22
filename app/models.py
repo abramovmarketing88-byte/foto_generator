@@ -52,6 +52,9 @@ class Profile(Base):
     height_cm: Mapped[int | None] = mapped_column(Integer, nullable=True)
     weight_kg: Mapped[int | None] = mapped_column(Integer, nullable=True)
     age: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    hair_color: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    eye_color: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    body_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
@@ -82,7 +85,7 @@ class ShootSettings(Base):
     lens_mm: Mapped[int | None] = mapped_column(Integer, nullable=True)
     angle_code: Mapped[str] = mapped_column(String(64), default="NON_SELFIE_PORTRAIT", nullable=False)
     framing_code: Mapped[str] = mapped_column(String(64), default="HALF_BODY", nullable=False)
-    output_size_code: Mapped[str] = mapped_column(String(64), default="SQUARE_1024", nullable=False)
+    output_size_code: Mapped[str] = mapped_column(String(64), default="1:1", nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )

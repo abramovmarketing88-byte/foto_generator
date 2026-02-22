@@ -27,7 +27,17 @@ class NeuroPhotoshootRepo:
     def get_user_by_id(self, user_id: int) -> User | None:
         return self.session.scalar(select(User).where(User.id == user_id))
 
-    def upsert_profile(self, user_id: int, profile_text: str, age: int | None, height_cm: int | None, weight_kg: int | None) -> Profile:
+    def upsert_profile(
+        self,
+        user_id: int,
+        profile_text: str,
+        age: int | None = None,
+        height_cm: int | None = None,
+        weight_kg: int | None = None,
+        hair_color: str | None = None,
+        eye_color: str | None = None,
+        body_type: str | None = None,
+    ) -> Profile:
         stmt = select(Profile).where(Profile.user_id == user_id)
         profile = self.session.scalar(stmt)
         if profile is None:
@@ -37,16 +47,43 @@ class NeuroPhotoshootRepo:
                 age=age,
                 height_cm=height_cm,
                 weight_kg=weight_kg,
+                hair_color=hair_color,
+                eye_color=eye_color,
+                body_type=body_type,
             )
             self.session.add(profile)
         else:
             profile.profile_text = profile_text
-            profile.age = age
-            profile.height_cm = height_cm
-            profile.weight_kg = weight_kg
+            if age is not None:
+                profile.age = age
+            if height_cm is not None:
+                profile.height_cm = height_cm
+            if weight_kg is not None:
+                profile.weight_kg = weight_kg
+            if hair_color is not None:
+                profile.hair_color = hair_color
+            if eye_color is not None:
+                profile.eye_color = eye_color
+            if body_type is not None:
+                profile.body_type = body_type
         self.session.commit()
         self.session.refresh(profile)
         return profile
+
+    def is_profile_complete(self, user_id: int) -> bool:
+        """Check if profile has all required physical traits (height, weight, hair, eyes, body type)."""
+        profile = self.get_profile(user_id)
+        if not profile:
+            return False
+        return all(
+            [
+                profile.height_cm is not None,
+                profile.weight_kg is not None,
+                profile.hair_color,
+                profile.eye_color,
+                profile.body_type,
+            ]
+        )
 
     def get_profile(self, user_id: int) -> Profile | None:
         return self.session.scalar(select(Profile).where(Profile.user_id == user_id))

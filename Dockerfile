@@ -14,4 +14,5 @@ COPY .env.example ./.env.example
 RUN mkdir -p /data/storage
 ENV STORAGE_DIR=/data/storage
 
+# Single entry point: one process runs bot + worker. Do not add a second service (avoids TelegramConflictError).
 CMD ["python", "-m", "app.bot.main"]

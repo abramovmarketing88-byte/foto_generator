@@ -77,9 +77,15 @@ Optional (safe defaults):
 - `MAX_PHOTOS_PER_USER=20`
 - `MAX_CONCURRENT_JOBS_PER_USER=2`
 
+## Single instance & conflict prevention (TelegramConflictError)
+- **One process only**: The Dockerfile and Railway deploy a single command `python -m app.bot.main`. Do not add a second "worker" or "web" service that runs the bot.
+- **Single Instance Guard**: On startup, the bot logs `pid` and `token_suffix` and uses `drop_pending_updates=True` when starting polling to avoid conflicts with previous sessions.
+- **Worker in-process**: The job worker runs inside the same process as the bot (`asyncio.create_task(run_worker(...))`). No separate Telegram client is created elsewhere.
+
 ## Worker lifecycle
 - Worker runs in the same process as bot polling (`asyncio.create_task`).
 - On startup, all stale `RUNNING` jobs are marked `FAILED` with `service restart`.
+- Before processing a job, the worker checks that reference photo files exist on disk; if missing (e.g. after Railway restart), the job is marked failed and the user is asked to re-upload photos.
 - Main loop is resilient and wrapped with `try/except`, so polling is not killed by worker errors.
 - Each job execution is guarded by `JOB_TIMEOUT_SEC`.
 - Graceful shutdown: stop event is set and worker task is cancelled safely.

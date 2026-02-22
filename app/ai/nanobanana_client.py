@@ -16,6 +16,13 @@ class NanoBananaError(RuntimeError):
     pass
 
 
+_SIZE_TO_ASPECT = {
+    "SQUARE_1024": "1:1", "LARGE_2048": "1:1",
+    "PORTRAIT_1024_1536": "3:4", "IG_1080_1350": "3:4",
+    "LANDSCAPE_1536_1024": "4:3", "HD_1920_1080": "16:9",
+}
+
+
 class NanoBananaClient:
     """Imagen (Google Gemini Image Generation) client via generativelanguage API."""
 
@@ -26,9 +33,10 @@ class NanoBananaClient:
 
     async def generate_image(self, user_id: int, final_prompt: str, images: list[bytes], size_code: str) -> bytes:
         """Generate image via Google Imagen API. Reference images are not sent (Imagen text-only format)."""
+        aspect = _SIZE_TO_ASPECT.get(size_code, size_code if ":" in str(size_code) else "1:1")
         payload = {
             "instances": [{"prompt": final_prompt}],
-            "parameters": {"sampleCount": 1},
+            "parameters": {"sampleCount": 1, "aspectRatio": aspect},
         }
         api_key = await get_api_key(user_id, "nanobanana")
         url = f"{self._endpoint}?key={api_key}"

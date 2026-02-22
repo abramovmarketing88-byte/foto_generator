@@ -13,6 +13,7 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, Message, ReplyKeyboardMarkup
+from sqlalchemy import text
 from sqlalchemy.orm import sessionmaker
 
 from app.config import Settings, get_settings
@@ -38,7 +39,16 @@ class AppContext:
 
 
 class ProfileState(StatesGroup):
-    waiting_profile_text = State()
+    waiting_height = State()
+    waiting_weight = State()
+    waiting_hair_color = State()
+    waiting_eye_color = State()
+    waiting_body_type = State()
+
+
+class ApiKeyState(StatesGroup):
+    waiting_gemini_key = State()
+    waiting_nanobanana_key = State()
 
 
 class PhotoState(StatesGroup):
@@ -166,25 +176,76 @@ def photo_menu(face_count: int, full_body_count: int) -> ReplyKeyboardMarkup:
     )
 
 
-def camera_inline(settings: dict[str, str | int | bool | None]) -> InlineKeyboardMarkup:
-    lens = [
-        ("Не выбирать", "none"),
-        ("24mm", "24"),
-        ("35mm", "35"),
-        ("50mm", "50"),
-        ("85mm", "85"),
-        ("135mm", "135"),
-    ]
-    angles = ["DRONE_TOP", "LOW_FROM_BELOW", "SIDE_PROFILE", "DUTCH_ANGLE", "PANORAMA_360", "FOOT_LEVEL", "ARM_LENGTH_SELFIE", "NON_SELFIE_PORTRAIT"]
-    framings = ["CLOSE_UP", "HALF_BODY", "FULL_BODY"]
-    sizes = ["SQUARE_1024", "PORTRAIT_1024_1536", "LANDSCAPE_1536_1024", "IG_1080_1350", "HD_1920_1080", "LARGE_2048"]
+# Camera sub-menu A: Technical Settings
+LENS_OPTIONS = [
+    ("Авто", "auto"),
+    ("24mm", "24"),
+    ("35mm", "35"),
+    ("50mm", "50"),
+    ("85mm", "85"),
+    ("135mm", "135"),
+]
+# Aspect ratio: label -> Imagen API code + DB storage
+ASPECT_OPTIONS = [
+    ("1:1 (Квадрат)", "1:1"),
+    ("3:4 (Портрет)", "3:4"),
+    ("4:3 (Ландшафт)", "4:3"),
+    ("9:16 (Сторис)", "9:16"),
+    ("16:9 (Кино)", "16:9"),
+]
+# Camera sub-menu B: Ракурсы и перспектива (Russian labels per spec)
+ANGLE_OPTIONS = [
+    ("Вид с дрона", "DRONE_TOP"),
+    ("Снизу", "LOW_FROM_BELOW"),
+    ("Сбоку (профиль)", "SIDE_PROFILE"),
+    ("Голландский угол", "DUTCH_ANGLE"),
+    ("Панорама 360", "PANORAMA_360"),
+    ("С уровня ног", "FOOT_LEVEL"),
+    ("Селфи", "ARM_LENGTH_SELFIE"),
+    ("Портрет", "NON_SELFIE_PORTRAIT"),
+    ("Авто", "AUTO"),
+]
+ANGLE_CODE_TO_RU = {code: label for label, code in ANGLE_OPTIONS}
 
-    rows: list[list[InlineKeyboardButton]] = [[InlineKeyboardButton(text=f"Lens: {settings['lens_mm'] if settings['lens_selected'] else 'none'}", callback_data="noop")]]
-    rows += [[InlineKeyboardButton(text=label, callback_data=f"lens:{val}")] for label, val in lens]
-    rows += [[InlineKeyboardButton(text=f"Angle: {a}", callback_data=f"angle:{a}")] for a in angles]
-    rows += [[InlineKeyboardButton(text=f"Framing: {f}", callback_data=f"framing:{f}")] for f in framings]
-    rows += [[InlineKeyboardButton(text=f"Size: {s}", callback_data=f"size:{s}")] for s in sizes]
+
+def camera_technical_inline(settings: dict) -> InlineKeyboardMarkup:
+    """Sub-menu A: Lens + Aspect Ratio."""
+    lens_val = settings.get("lens_mm")
+    lens_selected = settings.get("lens_selected", False)
+    lens_label = "Авто" if not lens_selected or lens_val is None else f"{lens_val}mm"
+    size_label = settings.get("output_size_code", "1:1")
+
+    rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(text="◀ Назад в Камеру", callback_data="camera:back")],
+        [InlineKeyboardButton(text=f"Объектив: {lens_label}", callback_data="noop")],
+    ]
+    rows += [[InlineKeyboardButton(text=label, callback_data=f"cam_lens:{val}")] for label, val in LENS_OPTIONS]
+    rows.append([InlineKeyboardButton(text=f"Размер фото: {size_label}", callback_data="noop")])
+    rows += [[InlineKeyboardButton(text=label, callback_data=f"cam_size:{val}")] for label, val in ASPECT_OPTIONS]
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def camera_angles_inline(settings: dict) -> InlineKeyboardMarkup:
+    """Sub-menu B: Angles & Perspectives."""
+    angle_label = settings.get("angle_code", "NON_SELFIE_PORTRAIT")
+    angle_ru = next((l for l, c in ANGLE_OPTIONS if c == angle_label), angle_label)
+
+    rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(text=f"◀ Назад в Камеру", callback_data="camera:back")],
+        [InlineKeyboardButton(text=f"Ракурс: {angle_ru}", callback_data="noop")],
+    ]
+    rows += [[InlineKeyboardButton(text=label, callback_data=f"cam_angle:{code}")] for label, code in ANGLE_OPTIONS]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def camera_main_inline() -> InlineKeyboardMarkup:
+    """Main Camera menu: choose sub-menu."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Технические настройки", callback_data="camera:technical")],
+            [InlineKeyboardButton(text="Ракурсы и перспектива", callback_data="camera:angles")],
+        ]
+    )
 
 
 def try_detect_face(path: Path) -> bool | None:
@@ -233,7 +294,13 @@ async def on_help_cmd(message: Message, app_ctx: AppContext) -> None:
 @with_error_handling
 async def on_help(message: Message, app_ctx: AppContext) -> None:
     _get_user(app_ctx, message.from_user.id)
-    await message.answer("Заполните профиль, загрузите минимум 1 фото лица, добавьте сцену и запустите генерацию.")
+    await message.answer(
+        "1. Профиль — укажите рост, вес, цвет волос, глаза, тип телосложения\n"
+        "2. Фото — загрузите минимум 1 фото лица\n"
+        "3. Сцена — опишите сцену\n"
+        "4. API ключи — установите ключи Gemini и Imagen\n"
+        "5. Генерация — запустите генерацию"
+    )
 
 
 @router.message(F.text == "API ключи")
@@ -242,17 +309,65 @@ async def api_keys_menu(message: Message, app_ctx: AppContext) -> None:
     _get_user(app_ctx, message.from_user.id)
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Gemini (анализ текста)", callback_data="api_help:gemini")],
-            [InlineKeyboardButton(text="Imagen (генерация картинок)", callback_data="api_help:nanobanana")],
+            [InlineKeyboardButton(text="Установить ключ Gemini", callback_data="api_set:gemini")],
+            [InlineKeyboardButton(text="Установить ключ Imagen", callback_data="api_set:nanobanana")],
+            [InlineKeyboardButton(text="Справка: Gemini", callback_data="api_help:gemini")],
+            [InlineKeyboardButton(text="Справка: Imagen", callback_data="api_help:nanobanana")],
         ]
     )
     await message.answer(
-        "Для генерации фотографий нужны API ключи Google AI.\n"
-        "Выберите сервис или используйте команды:\n"
-        "• /set_gemini <ключ> — анализ (Gemini)\n"
-        "• /set_nanobanana <ключ> — генерация (Imagen)",
+        "Управление API ключами. Выберите действие:",
         reply_markup=kb,
     )
+
+
+@router.callback_query(F.data.startswith("api_set:"))
+@with_error_handling
+async def api_set_callback(callback: CallbackQuery, state: FSMContext, app_ctx: AppContext) -> None:
+    provider = (callback.data or "").replace("api_set:", "", 1)
+    if not callback.message:
+        await callback.answer("Ошибка", show_alert=True)
+        return
+    if provider == "gemini":
+        await state.set_state(ApiKeyState.waiting_gemini_key)
+        await callback.message.answer("Отправьте ваш Gemini API ключ в следующем сообщении.")
+    elif provider == "nanobanana":
+        await state.set_state(ApiKeyState.waiting_nanobanana_key)
+        await callback.message.answer("Отправьте ваш Imagen API ключ в следующем сообщении.")
+    else:
+        await callback.answer("Неизвестный сервис", show_alert=True)
+        return
+    await callback.answer()
+
+
+@router.message(ApiKeyState.waiting_gemini_key, F.text)
+@with_error_handling
+async def save_gemini_key_from_state(message: Message, state: FSMContext, app_ctx: AppContext) -> None:
+    if not message.from_user:
+        return
+    key = (message.text or "").strip()
+    if not key:
+        await message.answer("Ключ не может быть пустым. Попробуйте снова.")
+        return
+    with app_ctx.session_factory() as session:
+        NeuroPhotoshootRepo(session).upsert_gemini_key(message.from_user.id, key)
+    await state.clear()
+    await message.answer("Ключ Gemini сохранён.", reply_markup=MAIN_MENU)
+
+
+@router.message(ApiKeyState.waiting_nanobanana_key, F.text)
+@with_error_handling
+async def save_nanobanana_key_from_state(message: Message, state: FSMContext, app_ctx: AppContext) -> None:
+    if not message.from_user:
+        return
+    key = (message.text or "").strip()
+    if not key:
+        await message.answer("Ключ не может быть пустым. Попробуйте снова.")
+        return
+    with app_ctx.session_factory() as session:
+        NeuroPhotoshootRepo(session).upsert_nanobanana_key(message.from_user.id, key)
+    await state.clear()
+    await message.answer("Ключ Imagen сохранён.", reply_markup=MAIN_MENU)
 
 
 @router.callback_query(F.data.startswith("api_help:"))
@@ -317,21 +432,126 @@ async def set_nanobanana_key(message: Message, app_ctx: AppContext) -> None:
     await message.answer("Ключ Imagen (генерация) сохранён.")
 
 
+def _format_profile_prompt(profile: object | None) -> str:
+    """Build profile_text from structured fields for prompt."""
+    if not profile:
+        return ""
+    parts = []
+    if getattr(profile, "height_cm", None):
+        parts.append(f"рост {profile.height_cm} см")
+    if getattr(profile, "weight_kg", None):
+        parts.append(f"вес {profile.weight_kg} кг")
+    if getattr(profile, "hair_color", None):
+        parts.append(f"волосы {profile.hair_color}")
+    if getattr(profile, "eye_color", None):
+        parts.append(f"глаза {profile.eye_color}")
+    if getattr(profile, "body_type", None):
+        parts.append(f"телосложение {profile.body_type}")
+    if getattr(profile, "profile_text", None) and profile.profile_text:
+        parts.append(profile.profile_text)
+    return ", ".join(parts) if parts else ""
+
+
 @router.message(F.text == "Профиль")
 @with_error_handling
 async def ask_profile(message: Message, state: FSMContext, app_ctx: AppContext) -> None:
-    _get_user(app_ctx, message.from_user.id)
-    await state.set_state(ProfileState.waiting_profile_text)
-    await message.answer("Отправьте одним сообщением физические признаки.")
-
-
-@router.message(ProfileState.waiting_profile_text, F.text)
-@with_error_handling
-async def save_profile(message: Message, state: FSMContext, app_ctx: AppContext) -> None:
     user_id = _get_user(app_ctx, message.from_user.id)
-    age, height_cm, weight_kg = parse_profile(message.text)
     with app_ctx.session_factory() as session:
-        NeuroPhotoshootRepo(session).upsert_profile(user_id, message.text, age, height_cm, weight_kg)
+        profile = NeuroPhotoshootRepo(session).get_profile(user_id)
+    if profile and _format_profile_prompt(profile):
+        preview = _format_profile_prompt(profile)
+        await message.answer(f"Текущий профиль: {preview}\n\nОбновить? Введите рост в см (например 175):")
+    else:
+        await message.answer("Введите рост в см (например 175):")
+    await state.set_state(ProfileState.waiting_height)
+
+
+@router.message(ProfileState.waiting_height, F.text)
+@with_error_handling
+async def save_height(message: Message, state: FSMContext, app_ctx: AppContext) -> None:
+    text = (message.text or "").strip()
+    try:
+        height = int(text)
+        if 100 <= height <= 250:
+            await state.update_data(profile_height=height)
+            await state.set_state(ProfileState.waiting_weight)
+            await message.answer("Введите вес в кг (например 70):")
+        else:
+            await message.answer("Рост должен быть от 100 до 250 см. Попробуйте снова.")
+    except ValueError:
+        await message.answer("Введите число (рост в см).")
+
+
+@router.message(ProfileState.waiting_weight, F.text)
+@with_error_handling
+async def save_weight(message: Message, state: FSMContext, app_ctx: AppContext) -> None:
+    text = (message.text or "").strip()
+    try:
+        weight = int(text)
+        if 30 <= weight <= 200:
+            await state.update_data(profile_weight=weight)
+            await state.set_state(ProfileState.waiting_hair_color)
+            await message.answer("Введите цвет волос (например: тёмно-каштановые, блонд, черные):")
+        else:
+            await message.answer("Вес должен быть от 30 до 200 кг. Попробуйте снова.")
+    except ValueError:
+        await message.answer("Введите число (вес в кг).")
+
+
+@router.message(ProfileState.waiting_hair_color, F.text)
+@with_error_handling
+async def save_hair_color(message: Message, state: FSMContext, app_ctx: AppContext) -> None:
+    hair = (message.text or "").strip()
+    if not hair or len(hair) < 2:
+        await message.answer("Введите цвет волос.")
+        return
+    await state.update_data(profile_hair=hair[:64])
+    await state.set_state(ProfileState.waiting_eye_color)
+    await message.answer("Введите цвет глаз (например: карие, голубые, зеленые):")
+
+
+@router.message(ProfileState.waiting_eye_color, F.text)
+@with_error_handling
+async def save_eye_color(message: Message, state: FSMContext, app_ctx: AppContext) -> None:
+    eyes = (message.text or "").strip()
+    if not eyes or len(eyes) < 2:
+        await message.answer("Введите цвет глаз.")
+        return
+    await state.update_data(profile_eyes=eyes[:64])
+    await state.set_state(ProfileState.waiting_body_type)
+    await message.answer("Введите тип телосложения (например: стройное, атлетичное, полное):")
+
+
+@router.message(ProfileState.waiting_body_type, F.text)
+@with_error_handling
+async def save_body_type(message: Message, state: FSMContext, app_ctx: AppContext) -> None:
+    user_id = _get_user(app_ctx, message.from_user.id)
+    body = (message.text or "").strip()
+    if not body or len(body) < 2:
+        await message.answer("Введите тип телосложения.")
+        return
+    data = await state.get_data()
+    parts = []
+    if data.get("profile_height"):
+        parts.append(f"рост {data['profile_height']} см")
+    if data.get("profile_weight"):
+        parts.append(f"вес {data['profile_weight']} кг")
+    if data.get("profile_hair"):
+        parts.append(f"волосы {data['profile_hair']}")
+    if data.get("profile_eyes"):
+        parts.append(f"глаза {data['profile_eyes']}")
+    parts.append(f"телосложение {body}")
+    profile_text = ", ".join(parts)
+    with app_ctx.session_factory() as session:
+        NeuroPhotoshootRepo(session).upsert_profile(
+            user_id,
+            profile_text=profile_text,
+            height_cm=data.get("profile_height"),
+            weight_kg=data.get("profile_weight"),
+            hair_color=data.get("profile_hair"),
+            eye_color=data.get("profile_eyes"),
+            body_type=body[:64],
+        )
     await state.clear()
     await message.answer("Профиль сохранён.", reply_markup=MAIN_MENU)
 
@@ -341,8 +561,12 @@ async def save_profile(message: Message, state: FSMContext, app_ctx: AppContext)
 async def show_profile(message: Message, app_ctx: AppContext) -> None:
     user_id = _get_user(app_ctx, message.from_user.id)
     with app_ctx.session_factory() as session:
-        profile = NeuroPhotoshootRepo(session).get_profile(user_id)
-    await message.answer(profile.profile_text if profile else "Профиль ещё не заполнен.")
+        repo = NeuroPhotoshootRepo(session)
+        profile = repo.get_profile(user_id)
+        complete = repo.is_profile_complete(user_id) if profile else False
+    text = _format_profile_prompt(profile) if profile else "Профиль ещё не заполнен."
+    status = "\n✅ Профиль полный." if complete else "\n⚠️ Заполните все поля (рост, вес, волосы, глаза, телосложение)."
+    await message.answer(text + status)
 
 
 @router.message(F.text == "Фото")
@@ -483,17 +707,11 @@ async def save_scene(message: Message, state: FSMContext, app_ctx: AppContext) -
 @router.message(F.text == "Камера")
 @with_error_handling
 async def camera_menu(message: Message, app_ctx: AppContext) -> None:
-    user_id = _get_user(app_ctx, message.from_user.id)
-    with app_ctx.session_factory() as session:
-        settings = NeuroPhotoshootRepo(session).get_or_create_shoot_settings(user_id)
-    data = {
-        "lens_selected": settings.lens_selected,
-        "lens_mm": settings.lens_mm,
-    }
-    await message.answer("Настройки камеры:", reply_markup=camera_inline(data))
+    _get_user(app_ctx, message.from_user.id)
+    await message.answer("Настройки камеры:", reply_markup=camera_main_inline())
 
 
-@router.callback_query(F.data.startswith(("lens:", "angle:", "framing:", "size:", "noop")))
+@router.callback_query(F.data.startswith(("camera:", "cam_lens:", "cam_size:", "cam_angle:", "noop")))
 @with_error_handling
 async def on_camera_callback(callback: CallbackQuery, app_ctx: AppContext) -> None:
     if callback.data == "noop":
@@ -503,37 +721,73 @@ async def on_camera_callback(callback: CallbackQuery, app_ctx: AppContext) -> No
         await callback.answer("Сообщение недоступно", show_alert=True)
         return
     user_id = _get_user(app_ctx, callback.from_user.id)
-    key, value = (callback.data or "").split(":", 1)
-    payload = {}
-    if key == "lens":
-        if value == "none":
+    data_raw = callback.data or ""
+
+    if data_raw == "camera:back":
+        await callback.message.edit_text("Настройки камеры:", reply_markup=camera_main_inline())
+        await callback.answer()
+        return
+    if data_raw == "camera:technical":
+        with app_ctx.session_factory() as session:
+            settings = NeuroPhotoshootRepo(session).get_or_create_shoot_settings(user_id)
+        settings_dict = {
+            "lens_selected": settings.lens_selected,
+            "lens_mm": settings.lens_mm,
+            "output_size_code": settings.output_size_code or "1:1",
+        }
+        await callback.message.edit_text("Технические настройки:", reply_markup=camera_technical_inline(settings_dict))
+        await callback.answer()
+        return
+    if data_raw == "camera:angles":
+        with app_ctx.session_factory() as session:
+            settings = NeuroPhotoshootRepo(session).get_or_create_shoot_settings(user_id)
+        settings_dict = {"angle_code": settings.angle_code or "NON_SELFIE_PORTRAIT"}
+        await callback.message.edit_text("Ракурсы и перспектива:", reply_markup=camera_angles_inline(settings_dict))
+        await callback.answer()
+        return
+
+    if data_raw.startswith("cam_lens:"):
+        val = data_raw.replace("cam_lens:", "", 1)
+        if val == "auto":
             payload = {"lens_selected": False, "lens_mm": None}
         else:
             try:
-                payload = {"lens_selected": True, "lens_mm": int(value)}
+                payload = {"lens_selected": True, "lens_mm": int(val)}
             except ValueError:
-                logger.warning("Invalid lens value in callback", extra={"data": callback.data})
-                await callback.answer("Invalid option", show_alert=True)
+                await callback.answer("Ошибка", show_alert=True)
                 return
-    elif key == "angle":
-        payload = {"angle_code": value}
-    elif key == "framing":
-        payload = {"framing_code": value}
-    elif key == "size":
-        payload = {"output_size_code": value}
+    elif data_raw.startswith("cam_size:"):
+        payload = {"output_size_code": data_raw.replace("cam_size:", "", 1)}
+    elif data_raw.startswith("cam_angle:"):
+        payload = {"angle_code": data_raw.replace("cam_angle:", "", 1)}
+    else:
+        await callback.answer()
+        return
 
     with app_ctx.session_factory() as session:
         repo = NeuroPhotoshootRepo(session)
         repo.update_shoot_settings(user_id, **payload)
         settings = repo.get_or_create_shoot_settings(user_id)
 
-    try:
-        await callback.message.edit_reply_markup(
-            reply_markup=camera_inline({"lens_selected": settings.lens_selected, "lens_mm": settings.lens_mm})
-        )
-    except Exception as e:
-        if "not modified" not in str(e).lower():
-            logger.warning("Failed to edit camera markup: %s", e)
+    settings_dict_tech = {
+        "lens_selected": settings.lens_selected,
+        "lens_mm": settings.lens_mm,
+        "output_size_code": settings.output_size_code or "1:1",
+    }
+    settings_dict_angles = {"angle_code": settings.angle_code}
+    if "lens_selected" in payload or "lens_mm" in payload or "output_size_code" in payload:
+        try:
+            await callback.message.edit_reply_markup(reply_markup=camera_technical_inline(settings_dict_tech))
+        except Exception as e:
+            if "not modified" not in str(e).lower():
+                logger.warning("Failed to edit camera markup: %s", e)
+    elif "angle_code" in payload:
+        try:
+            await callback.message.edit_reply_markup(reply_markup=camera_angles_inline(settings_dict_angles))
+        except Exception as e:
+            if "not modified" not in str(e).lower():
+                logger.warning("Failed to edit camera markup: %s", e)
+
     await callback.answer("Сохранено")
 
 
@@ -556,13 +810,19 @@ async def generate(message: Message, app_ctx: AppContext) -> None:
         full_body_photos = repo.list_photos(user_id, PhotoKind.FULL_BODY)
 
         if not profile:
-            await message.answer("Сначала заполните профиль.")
+            await message.answer("Сначала заполните профиль (рост, вес, цвет волос, цвет глаз, тип телосложения).")
+            return
+        if not repo.is_profile_complete(user_id):
+            await message.answer(
+                "Заполните все поля профиля: рост, вес, цвет волос, цвет глаз, тип телосложения. "
+                "Используйте меню «Профиль»."
+            )
             return
         if len(face_photos) < 5:
-            await message.answer("Загрузите 5 фото лица перед генерацией.")
+            await message.answer("Загрузите 5 фото лица в меню «Фото» перед генерацией.")
             return
         if len(full_body_photos) < 2:
-            await message.answer("Загрузите 2 фото в полный рост перед генерацией.")
+            await message.answer("Загрузите 2 фото в полный рост в меню «Фото» перед генерацией.")
             return
 
         missing_face = [photo.file_path for photo in face_photos if not Path(photo.file_path).exists()]
@@ -578,7 +838,7 @@ async def generate(message: Message, app_ctx: AppContext) -> None:
             )
             await message.answer(
                 "⚠️ Часть фото недоступна после перезапуска сервера. "
-                "Пожалуйста, заново загрузите фото в меню «Профиль»."
+                "Пожалуйста, заново загрузите фото в меню «Фото»."
             )
             return
 
@@ -609,9 +869,9 @@ async def history(message: Message, app_ctx: AppContext) -> None:
 
     for g in generations:
         scene_preview = (g.final_prompt or "")[:50] + ("..." if len(g.final_prompt or "") > 50 else "")
-        lens_str = f"{settings.lens_mm}mm" if (settings.lens_selected and settings.lens_mm is not None) else "не выбрана"
-        angle_str = settings.angle_code or "—"
-        size_str = settings.output_size_code or "—"
+        lens_str = f"{settings.lens_mm}mm" if (settings.lens_selected and settings.lens_mm) else "Авто"
+        angle_str = ANGLE_CODE_TO_RU.get(settings.angle_code, settings.angle_code or "—")
+        size_str = settings.output_size_code or "1:1"
         kb = InlineKeyboardMarkup(
             inline_keyboard=[[InlineKeyboardButton(text="Отправить результат", callback_data=f"send_result:{g.id}")]]
         )
@@ -667,12 +927,26 @@ async def main() -> None:
     configure_keys_service(settings, session_factory)
     with session_factory() as session:
         Base.metadata.create_all(bind=session.bind)
+        # Migration: add new profile columns if missing
+        for col, typ in [("hair_color", "VARCHAR(64)"), ("eye_color", "VARCHAR(64)"), ("body_type", "VARCHAR(64)")]:
+            try:
+                session.execute(text(f"ALTER TABLE profiles ADD COLUMN {col} {typ}"))  # noqa: S608
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                if "duplicate column" not in str(e).lower() and "already exists" not in str(e).lower():
+                    logger.warning("Profile migration for %s failed: %s", col, e)
 
     app_ctx = AppContext(settings=settings, session_factory=session_factory, storage=storage)
 
     token = settings.telegram_bot_token
-    logger.info("Bot process started | pid=%s | token_suffix=%s", os.getpid(), token[-4:] if len(token) >= 4 else "????")
-    # Single bot instance, long polling only (no webhook). No conflicting update receivers.
+    token_suffix = token[-4:] if len(token) >= 4 else "????"
+    # Single Instance Guard: one process, one Bot, one polling loop. Prevents TelegramConflictError.
+    logger.info(
+        "Single instance guard | pid=%s | token_suffix=%s | drop_pending_updates=True",
+        os.getpid(),
+        token_suffix,
+    )
     bot = Bot(token)
     dp = Dispatcher()
     dp.include_router(router)
@@ -681,7 +955,7 @@ async def main() -> None:
     stop_event = asyncio.Event()
     worker_task = asyncio.create_task(run_worker(bot, settings, session_factory, storage, stop_event))
 
-    logger.info("Starting bot polling")
+    logger.info("Starting bot polling (single process, no webhook)")
     try:
         await dp.start_polling(bot, drop_pending_updates=True)
     finally:
