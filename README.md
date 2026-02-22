@@ -43,9 +43,10 @@ README.md
   - Input: FACE photo bytes.
   - Output: `face_signature_text` + `warnings[]`.
   - If Gemini fails after retries, worker continues with empty signature.
-- **NanoBanana** is used **only** for final image generation.
+- **Imagen (NanoBanana)** is used **only** for final image generation (Google Imagen / Gemini Image Generation API).
   - Input: deterministic `final_prompt` + reference photos.
   - Output: generated image bytes.
+  - API: Google AI (Generative AI) or Vertex AI; model `imagen-3.0-generate-001`. Same API key as Gemini (e.g. from [Google AI Studio](https://aistudio.google.com/apikey)).
 
 ### Processing flow per job
 1. User presses `Генерация` → job is created with `QUEUED` status.

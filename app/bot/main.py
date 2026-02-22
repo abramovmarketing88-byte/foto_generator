@@ -118,7 +118,7 @@ def with_error_handling(func: Callable[..., Coroutine[None, None, T]]) -> Callab
         except MissingKeyError:
             logger.warning("Missing API key for handler | context=%s", context)
             if _can_reply(event):
-                await event.answer("⚠️ API Key not found. Please provide your key using /set_gemini or /set_nanobanana.")
+                await event.answer("⚠️ API-ключ не найден. Используйте /set_gemini или /set_nanobanana (см. «API ключи» в меню).")
             return None
         except Exception:
             logger.exception("Handler error | context=%s", context)
@@ -241,15 +241,15 @@ async def api_keys_menu(message: Message, app_ctx: AppContext) -> None:
     _get_user(app_ctx, message.from_user.id)
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Gemini (анализ и Imagen)", callback_data="api_help:gemini")],
-            [InlineKeyboardButton(text="NanoBanana (генерация)", callback_data="api_help:nanobanana")],
+            [InlineKeyboardButton(text="Gemini (анализ текста)", callback_data="api_help:gemini")],
+            [InlineKeyboardButton(text="Imagen (генерация картинок)", callback_data="api_help:nanobanana")],
         ]
     )
     await message.answer(
-        "Для генерации фотографий нужны API ключи.\n"
+        "Для генерации фотографий нужны API ключи Google AI.\n"
         "Выберите сервис или используйте команды:\n"
-        "• /set_gemini <ключ> — для Gemini (Google)\n"
-        "• /set_nanobanana <ключ> — для NanoBanana",
+        "• /set_gemini <ключ> — анализ (Gemini)\n"
+        "• /set_nanobanana <ключ> — генерация (Imagen)",
         reply_markup=kb,
     )
 
@@ -268,10 +268,14 @@ async def api_help_callback(callback: CallbackQuery, app_ctx: AppContext) -> Non
         )
     elif provider == "nanobanana":
         text = (
-            "🔑 NanoBanana API key\n\n"
-            "1. Получите ключ у провайдера NanoBanana\n"
-            "2. Отправьте в чат:\n"
-            "<code>/set_nanobanana ВАШ_КЛЮЧ</code>"
+            "🔑 Imagen (генерация изображений)\n\n"
+            "Используется модель Google Imagen (Gemini Image Generation). Тот же ключ, что и для Gemini.\n\n"
+            "1. Откройте https://aistudio.google.com/apikey\n"
+            "2. Создайте API-ключ (или используйте уже созданный для Gemini)\n"
+            "3. Включите доступ к генерации изображений в проекте Google Cloud при необходимости\n"
+            "4. Отправьте в чат:\n"
+            "<code>/set_nanobanana ВАШ_КЛЮЧ</code>\n\n"
+            "Документация: https://cloud.google.com/vertex-ai/docs/generative-ai/image/generate-images"
         )
     else:
         text = "Неизвестный сервис."
@@ -309,7 +313,7 @@ async def set_nanobanana_key(message: Message, app_ctx: AppContext) -> None:
 
     with app_ctx.session_factory() as session:
         NeuroPhotoshootRepo(session).upsert_nanobanana_key(message.from_user.id, parts[1].strip())
-    await message.answer("NanoBanana API key сохранен.")
+    await message.answer("Ключ Imagen (генерация) сохранён.")
 
 
 @router.message(F.text == "Профиль")
