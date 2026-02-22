@@ -16,18 +16,30 @@ class NanoBananaError(RuntimeError):
     pass
 
 
-# Map UI size codes and raw "1:1" etc. to Imagen API aspectRatio (Google accepts "1:1", "3:4", "4:3", "9:16", "16:9")
-_SIZE_TO_ASPECT = {
+# Map UI size codes and menu values to Imagen API aspectRatio.
+# Vertex AI / Gemini Image API: use string "1:1", "3:4", "4:3", "9:16", "16:9" (per docs).
+# If your API returns 400 on aspectRatio, try ASPECT_RATIO_* enum (see _ASPECT_RATIO_ENUM).
+_ASPECT_RATIO_COLON = {
     "SQUARE_1024": "1:1", "LARGE_2048": "1:1",
     "PORTRAIT_1024_1536": "3:4", "IG_1080_1350": "3:4",
     "LANDSCAPE_1536_1024": "4:3", "HD_1920_1080": "16:9",
     "1:1": "1:1", "3:4": "3:4", "4:3": "4:3", "9:16": "9:16", "16:9": "16:9",
 }
+_ASPECT_RATIO_ENUM = {
+    "1:1": "ASPECT_RATIO_1_1",
+    "3:4": "ASPECT_RATIO_3_4",
+    "4:3": "ASPECT_RATIO_4_3",
+    "9:16": "ASPECT_RATIO_9_16",
+    "16:9": "ASPECT_RATIO_16_9",
+}
+_VALID_COLON = frozenset(("1:1", "3:4", "4:3", "9:16", "16:9"))
 
 
-def _normalize_aspect(size_code: str) -> str:
-    v = _SIZE_TO_ASPECT.get(size_code) or (size_code if ":" in str(size_code) else "1:1")
-    return v if v in ("1:1", "3:4", "4:3", "9:16", "16:9") else "1:1"
+def _normalize_aspect(size_code: str, use_enum: bool = False) -> str:
+    """Return API-ready aspect ratio. use_enum=True for ASPECT_RATIO_* (if API rejects "1:1")."""
+    v = _ASPECT_RATIO_COLON.get(size_code) or (size_code if ":" in str(size_code) else "1:1")
+    v = v if v in _VALID_COLON else "1:1"
+    return _ASPECT_RATIO_ENUM[v] if use_enum else v
 
 
 class NanoBananaClient:
@@ -40,7 +52,7 @@ class NanoBananaClient:
 
     async def generate_image(self, user_id: int, final_prompt: str, images: list[bytes], size_code: str) -> bytes:
         """Generate image via Google Imagen API. Reference images are not sent (Imagen text-only format)."""
-        aspect = _normalize_aspect(size_code)
+        aspect = _normalize_aspect(size_code, use_enum=False)
         prompt_trimmed = (final_prompt or "")[:480]
         payload = {
             "instances": [{"prompt": prompt_trimmed}],

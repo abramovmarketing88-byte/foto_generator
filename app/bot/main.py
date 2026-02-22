@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+import inspect
 import logging
 import os
 import re
-import asyncio
-import inspect
+import signal
 from pathlib import Path
 from typing import Callable, Coroutine, TypeVar
 
@@ -958,6 +959,32 @@ async def main() -> None:
 
     stop_event = asyncio.Event()
     worker_task = asyncio.create_task(run_worker(bot, settings, session_factory, storage, stop_event))
+    loop = asyncio.get_running_loop()
+
+    def _graceful_stop(*_args: object) -> None:
+        logger.info("Received SIGTERM/SIGINT, stopping polling gracefully")
+        loop.call_soon_thread_safe(lambda: asyncio.create_task(_stop_polling_and_cleanup()))
+
+    async def _stop_polling_and_cleanup() -> None:
+        stop_event.set()
+        worker_task.cancel()
+        try:
+            await worker_task
+        except asyncio.CancelledError:
+            pass
+        try:
+            if hasattr(dp, "stop_polling"):
+                await dp.stop_polling()
+        except Exception as e:
+            logger.warning("stop_polling: %s", e)
+        try:
+            await bot.session.close()
+        except Exception as e:
+            logger.warning("Error closing bot session on signal: %s", e)
+        logger.info("Bot and worker stopped")
+
+    if hasattr(signal, "SIGTERM"):
+        signal.signal(signal.SIGTERM, _graceful_stop)
 
     logger.info("Starting bot polling (single process, no webhook)")
     try:
@@ -969,6 +996,10 @@ async def main() -> None:
             await worker_task
         except asyncio.CancelledError:
             logger.info("Worker task cancelled")
+        try:
+            await bot.session.close()
+        except Exception as e:
+            logger.warning("Error closing bot session: %s", e)
 
 
 if __name__ == "__main__":
