@@ -1,9 +1,15 @@
 FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    QT_QPA_PLATFORM=offscreen
 
 WORKDIR /app
+
+# OpenCV/MediaPipe headless: avoid "libxcb.so.1: cannot open shared object file"
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libxcb1 libxcb-shm0 libxcb-xfixes0 libgl1-mesa-glx \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

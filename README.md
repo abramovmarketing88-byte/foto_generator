@@ -73,7 +73,7 @@ Optional (safe defaults):
 - `NANOBANANA_RETRIES=5`
 - `JOB_TIMEOUT_SEC=120`
 - `DATABASE_URL=sqlite+pysqlite:///./storage/neurophotoshoot.db`
-- `STORAGE_DIR=./storage` (Railway recommended: `/data/storage`)
+- `STORAGE_DIR=./storage` (Railway: use a **persistent volume** path, e.g. `/data/storage`; see below)
 - `MAX_PHOTOS_PER_USER=20`
 - `MAX_CONCURRENT_JOBS_PER_USER=2`
 
@@ -82,10 +82,15 @@ Optional (safe defaults):
 - **Single Instance Guard**: On startup, the bot logs `pid` and `token_suffix` and uses `drop_pending_updates=True` when starting polling to avoid conflicts with previous sessions.
 - **Worker in-process**: The job worker runs inside the same process as the bot (`asyncio.create_task(run_worker(...))`). No separate Telegram client is created elsewhere.
 
+## Persistent storage (Railway)
+- **Problem**: Railway's filesystem is ephemeral. After deploy/restart, files under `STORAGE_DIR` are lost while the DB still references them → "Generate rejected due to missing files on disk".
+- **Fix**: Mount a **Railway Volume** and set `STORAGE_DIR` to a path inside it (e.g. `/data/storage`). Create a volume in the dashboard, mount at `/data`, and ensure the app writes photos and DB (if using file-based SQLite) under `/data`.
+- The worker checks that reference photo files exist before running a job; if missing, the user is notified to re-upload in «Фото».
+
 ## Worker lifecycle
 - Worker runs in the same process as bot polling (`asyncio.create_task`).
 - On startup, all stale `RUNNING` jobs are marked `FAILED` with `service restart`.
-- Before processing a job, the worker checks that reference photo files exist on disk; if missing (e.g. after Railway restart), the job is marked failed and the user is asked to re-upload photos.
+- Before processing a job, the worker checks that reference photo files exist on disk; if missing (e.g. after Railway restart without persistent volume), the job is marked failed and the user is asked to re-upload photos.
 - Main loop is resilient and wrapped with `try/except`, so polling is not killed by worker errors.
 - Each job execution is guarded by `JOB_TIMEOUT_SEC`.
 - Graceful shutdown: stop event is set and worker task is cancelled safely.

@@ -8,8 +8,8 @@ from aiogram import Bot
 from aiogram.types import BufferedInputFile
 from sqlalchemy.orm import sessionmaker
 
-from app.ai.gemini_analyzer import GeminiAnalyzer
-from app.ai.nanobanana_client import NanoBananaClient
+from app.ai.gemini_analyzer import GeminiAnalyzer, GeminiQuotaExceededError
+from app.ai.nanobanana_client import ImagenBillingRequiredError, NanoBananaClient
 from app.config import Settings
 from app.models import JobStatus, PhotoKind
 from app.prompt_builder import build_final_prompt
@@ -154,13 +154,24 @@ async def run_worker(bot: Bot, settings: Settings, session_factory: sessionmaker
                     if isinstance(exc, MissingKeyError):
                         await bot.send_message(
                             user.telegram_user_id,
-                            "⚠️ API Key not found. Please provide your key using /set_gemini or /set_nanobanana.",
+                            "⚠️ API-ключ не найден. Укажите ключ в меню «API ключи».",
                         )
                     elif isinstance(exc, ReferencePhotosExpiredError):
                         await bot.send_message(
                             user.telegram_user_id,
-                            "⚠️ Фото из вашей сессии недоступны после перезапуска сервера. "
-                            "Пожалуйста, заново загрузите фото в меню «Профиль».",
+                            "⚠️ Фото недоступны после перезапуска сервера. Загрузите фото заново в меню «Фото».",
+                        )
+                    elif isinstance(exc, GeminiQuotaExceededError):
+                        await bot.send_message(
+                            user.telegram_user_id,
+                            "⚠️ Исчерпан лимит Gemini (бесплатный уровень). Подключите биллинг в Google Cloud или попробуйте завтра.\n"
+                            "https://console.cloud.google.com/billing",
+                        )
+                    elif isinstance(exc, ImagenBillingRequiredError):
+                        await bot.send_message(
+                            user.telegram_user_id,
+                            "⚠️ Imagen доступен только с платным аккаунтом Google Cloud. Подключите биллинг:\n"
+                            "https://console.cloud.google.com/billing",
                         )
                     else:
                         await bot.send_message(user.telegram_user_id, f"Не удалось выполнить генерацию для задачи #{job.id}. Попробуйте позже.")

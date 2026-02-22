@@ -14,6 +14,10 @@ from app.services.keys import get_api_key
 
 logger = logging.getLogger(__name__)
 
+
+class GeminiQuotaExceededError(RuntimeError):
+    """Gemini free tier quota exhausted (429 with limit: 0). User must enable billing or wait."""
+
 # Delay before first Gemini call in a job to stay within free tier when processing multiple jobs
 GEMINI_REQUEST_DELAY_SEC = 1.5
 
@@ -69,6 +73,17 @@ class GeminiAnalyzer:
                     response = await client.post(url, json=payload)
                 if response.status_code == 429:
                     body_snippet = response.text[:1500]
+                    msg_lower = body_snippet.lower()
+                    # Quota exhausted (limit: 0) — retrying won't help; fail fast with clear error
+                    if "limit: 0" in msg_lower or "quota exceeded" in msg_lower or "resource_exhausted" in msg_lower:
+                        logger.warning(
+                            "Gemini quota exceeded (free tier exhausted) | response=%s",
+                            body_snippet[:500],
+                            extra={"status": 429, "response_body": body_snippet},
+                        )
+                        raise GeminiQuotaExceededError(
+                            "Gemini quota exceeded. Enable billing at https://console.cloud.google.com/billing or try again later (daily limit resets)."
+                        )
                     logger.warning(
                         "Gemini 429 Too Many Requests | attempt=%s | response=%s",
                         attempt,

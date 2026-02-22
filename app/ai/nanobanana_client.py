@@ -16,6 +16,10 @@ class NanoBananaError(RuntimeError):
     pass
 
 
+class ImagenBillingRequiredError(NanoBananaError):
+    """Imagen API requires a billed Google Cloud project (400)."""
+
+
 # Map UI size codes and menu values to Imagen API aspectRatio.
 # Vertex AI / Gemini Image API: use string "1:1", "3:4", "4:3", "9:16", "16:9" (per docs).
 # If your API returns 400 on aspectRatio, try ASPECT_RATIO_* enum (see _ASPECT_RATIO_ENUM).
@@ -90,6 +94,10 @@ class NanoBananaClient:
                             "response_body": body_full,
                         },
                     )
+                    if "only accessible to billed users" in body_full.lower() or "billed users" in body_full.lower():
+                        raise ImagenBillingRequiredError(
+                            "Imagen is only available with Google Cloud billing. Enable billing: https://console.cloud.google.com/billing"
+                        )
                     response.raise_for_status()
 
                 data = response.json()
@@ -101,8 +109,14 @@ class NanoBananaClient:
                 if not image_b64:
                     raise NanoBananaError("missing image bytes in prediction")
                 return base64.b64decode(image_b64)
+            except ImagenBillingRequiredError:
+                raise
             except httpx.HTTPStatusError as exc:
                 body_full = (exc.response.text if exc.response else "")[:2000]
+                if "only accessible to billed users" in body_full.lower() or "billed users" in body_full.lower():
+                    raise ImagenBillingRequiredError(
+                        "Imagen is only available with Google Cloud billing. Enable billing: https://console.cloud.google.com/billing"
+                    )
                 logger.warning(
                     "Imagen HTTPStatusError | status=%s | response=%s",
                     exc.response.status_code if exc.response else None, body_full,
