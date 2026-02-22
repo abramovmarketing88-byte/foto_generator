@@ -86,6 +86,7 @@ def with_error_handling(func: Callable[..., Coroutine[None, None, T]]) -> Callab
             return None
 
         try:
+            kwargs.pop("dispatcher", None)  # aiogram passes it; handlers don't expect it
             return await func(event, *args, **kwargs)
         except MissingKeyError:
             if _can_reply(event):
