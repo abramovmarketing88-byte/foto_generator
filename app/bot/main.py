@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import asyncio
 import inspect
@@ -551,14 +552,36 @@ async def generate(message: Message, app_ctx: AppContext) -> None:
         repo = NeuroPhotoshootRepo(session)
         profile = repo.get_profile(user_id)
         scene = repo.get_scene(user_id)
-        face_count = repo.count_photos(user_id, PhotoKind.FACE)
+        face_photos = repo.list_photos(user_id, PhotoKind.FACE)
+        full_body_photos = repo.list_photos(user_id, PhotoKind.FULL_BODY)
 
         if not profile:
             await message.answer("Сначала заполните профиль.")
             return
-        if face_count < 1:
-            await message.answer("Загрузите минимум 1 фото лица.")
+        if len(face_photos) < 5:
+            await message.answer("Загрузите 5 фото лица перед генерацией.")
             return
+        if len(full_body_photos) < 2:
+            await message.answer("Загрузите 2 фото в полный рост перед генерацией.")
+            return
+
+        missing_face = [photo.file_path for photo in face_photos if not Path(photo.file_path).exists()]
+        missing_full_body = [photo.file_path for photo in full_body_photos if not Path(photo.file_path).exists()]
+        if missing_face or missing_full_body:
+            logger.warning(
+                "Generate rejected due to missing files on disk",
+                extra={
+                    "user_id": user_id,
+                    "missing_face_count": len(missing_face),
+                    "missing_full_body_count": len(missing_full_body),
+                },
+            )
+            await message.answer(
+                "⚠️ Часть фото недоступна после перезапуска сервера. "
+                "Пожалуйста, заново загрузите фото в меню «Профиль»."
+            )
+            return
+
         if not scene:
             await message.answer("Сначала опишите сцену.")
             return
@@ -648,7 +671,7 @@ async def main() -> None:
     app_ctx = AppContext(settings=settings, session_factory=session_factory, storage=storage)
 
     token = settings.telegram_bot_token
-    logger.info("Bot started using token ending in: ...%s", token[-5:] if len(token) >= 5 else "?????")
+    logger.info("Bot process started | pid=%s | token_suffix=%s", os.getpid(), token[-4:] if len(token) >= 4 else "????")
     # Single bot instance, long polling only (no webhook). No conflicting update receivers.
     bot = Bot(token)
     dp = Dispatcher()
@@ -660,7 +683,7 @@ async def main() -> None:
 
     logger.info("Starting bot polling")
     try:
-        await dp.start_polling(bot)
+        await dp.start_polling(bot, drop_pending_updates=True)
     finally:
         stop_event.set()
         worker_task.cancel()

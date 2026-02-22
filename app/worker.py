@@ -21,6 +21,10 @@ from app.storage import LocalStorage
 logger = logging.getLogger(__name__)
 
 
+class ReferencePhotosExpiredError(RuntimeError):
+    """Raised when photo paths are present in DB, but files are gone on disk."""
+
+
 def _generation_caption(lens_selected: bool, lens_mm: int | None, angle_code: str, size_code: str) -> str:
     lens_text = f"{lens_mm}mm" if lens_selected and lens_mm else "natural lens"
     return f"Готово!\nЛинза: {lens_text}\nРакурс: {angle_code}\nРазмер: {size_code}"
@@ -49,12 +53,18 @@ async def _run_job(
     if not user or not profile or not scene:
         raise RuntimeError("job context is incomplete")
 
-    face_paths = [p.file_path for p in photos if p.kind == PhotoKind.FACE]
-    ref_paths = [p.file_path for p in photos]
-    face_bytes = [Path(path).read_bytes() for path in face_paths if Path(path).exists()]
-    ref_bytes = [Path(path).read_bytes() for path in ref_paths if Path(path).exists()]
-    if not ref_bytes:
-        raise RuntimeError("reference photos are missing")
+    face_paths = [Path(p.file_path) for p in photos if p.kind == PhotoKind.FACE]
+    ref_paths = [Path(p.file_path) for p in photos]
+    missing_paths = [str(path) for path in ref_paths if not path.exists()]
+    if missing_paths:
+        logger.warning(
+            "Reference photos are missing on disk",
+            extra={"job_id": job_id, "user_id": job.user_id, "missing_paths": missing_paths},
+        )
+        raise ReferencePhotosExpiredError("reference photos are missing")
+
+    face_bytes = [path.read_bytes() for path in face_paths]
+    ref_bytes = [path.read_bytes() for path in ref_paths]
 
     face_signature_text, warnings = await gemini.analyze_user_photos(user.telegram_user_id, face_bytes)
     if warnings:
@@ -130,6 +140,12 @@ async def run_worker(bot: Bot, settings: Settings, session_factory: sessionmaker
                         await bot.send_message(
                             user.telegram_user_id,
                             "⚠️ API Key not found. Please provide your key using /set_gemini or /set_nanobanana.",
+                        )
+                    elif isinstance(exc, ReferencePhotosExpiredError):
+                        await bot.send_message(
+                            user.telegram_user_id,
+                            "⚠️ Фото из вашей сессии недоступны после перезапуска сервера. "
+                            "Пожалуйста, заново загрузите фото в меню «Профиль».",
                         )
                     else:
                         await bot.send_message(user.telegram_user_id, f"Не удалось выполнить генерацию для задачи #{job.id}. Попробуйте позже.")
