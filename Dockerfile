@@ -8,7 +8,7 @@ WORKDIR /app
 
 # OpenCV/MediaPipe headless: avoid "libxcb.so.1: cannot open shared object file"
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libxcb1 libxcb-shm0 libxcb-xfixes0 libgl1 \
+    libxcb1 libxcb-shm0 libxcb-xfixes0 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
