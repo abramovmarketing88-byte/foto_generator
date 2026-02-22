@@ -14,11 +14,14 @@ from app.services.keys import get_api_key
 
 logger = logging.getLogger(__name__)
 
+# Delay before first Gemini call in a job to stay within free tier when processing multiple jobs
+GEMINI_REQUEST_DELAY_SEC = 1.5
+
 
 class GeminiAnalyzer:
     def __init__(self, settings: Settings):
         self._model = "gemini-2.0-flash"
-        self._retries = settings.gemini_retries
+        self._retries = max(settings.gemini_retries, 4)  # at least 4 for exponential backoff
 
     @staticmethod
     def _optimize_image(image_bytes: bytes) -> bytes:
@@ -33,6 +36,7 @@ class GeminiAnalyzer:
         if not face_photos:
             return "", []
 
+        await asyncio.sleep(GEMINI_REQUEST_DELAY_SEC)
         optimized = [self._optimize_image(photo) for photo in face_photos]
         api_key = await get_api_key(user_id, "gemini")
         payload = {
@@ -63,18 +67,43 @@ class GeminiAnalyzer:
             try:
                 async with httpx.AsyncClient(timeout=45.0) as client:
                     response = await client.post(url, json=payload)
-                response.raise_for_status()
+                if response.status_code == 429:
+                    body_snippet = response.text[:1500]
+                    logger.warning(
+                        "Gemini 429 Too Many Requests | attempt=%s | response=%s",
+                        attempt,
+                        body_snippet,
+                        extra={"status": 429, "attempt": attempt, "response_body": body_snippet},
+                    )
+                    last_error = RuntimeError(f"Gemini 429: {body_snippet[:200]}")
+                    if attempt < self._retries:
+                        delay = 5 * (2 ** (attempt - 1))
+                        logger.info("Gemini exponential backoff: waiting %s s", delay)
+                        await asyncio.sleep(delay)
+                    continue
+                if response.status_code >= 400:
+                    body_snippet = response.text[:1500]
+                    logger.warning(
+                        "Gemini API error | status=%s | response=%s",
+                        response.status_code,
+                        body_snippet,
+                        extra={"status": response.status_code, "response_body": body_snippet},
+                    )
+                    response.raise_for_status()
                 body = response.json()
                 raw_text = body["candidates"][0]["content"]["parts"][0]["text"]
                 parsed = json.loads(raw_text)
                 face_signature_text = str(parsed.get("face_signature_text", "")).strip()
                 warnings = [str(w).strip() for w in parsed.get("warnings", []) if str(w).strip()]
                 return face_signature_text, warnings
+            except httpx.HTTPStatusError:
+                raise
             except Exception as exc:
                 last_error = exc
                 logger.warning("Gemini analysis retry", extra={"attempt": attempt, "max_attempts": self._retries})
                 if attempt < self._retries:
-                    await asyncio.sleep(2 ** (attempt - 1))
+                    delay = 2 ** (attempt - 1)
+                    await asyncio.sleep(delay)
 
         logger.warning("Gemini analysis failed; continuing without face signature", exc_info=last_error)
         return "", []

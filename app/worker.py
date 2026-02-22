@@ -164,7 +164,11 @@ async def run_worker(bot: Bot, settings: Settings, session_factory: sessionmaker
                         )
                     else:
                         await bot.send_message(user.telegram_user_id, f"Не удалось выполнить генерацию для задачи #{job.id}. Попробуйте позже.")
-                logger.exception("Job failed", extra={"job_id": job.id, "user_id": job.user_id})
+                logger.exception(
+                    "Job failed | job_id=%s user_id=%s error_type=%s error_message=%s",
+                    job.id, job.user_id, type(exc).__name__, error_text,
+                    extra={"job_id": job.id, "user_id": job.user_id, "error_type": type(exc).__name__, "error_message": error_text},
+                )
         except Exception:
             logger.exception("Worker loop error")
             await asyncio.sleep(1.0)

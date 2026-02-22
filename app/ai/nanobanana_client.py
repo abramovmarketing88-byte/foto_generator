@@ -16,11 +16,18 @@ class NanoBananaError(RuntimeError):
     pass
 
 
+# Map UI size codes and raw "1:1" etc. to Imagen API aspectRatio (Google accepts "1:1", "3:4", "4:3", "9:16", "16:9")
 _SIZE_TO_ASPECT = {
     "SQUARE_1024": "1:1", "LARGE_2048": "1:1",
     "PORTRAIT_1024_1536": "3:4", "IG_1080_1350": "3:4",
     "LANDSCAPE_1536_1024": "4:3", "HD_1920_1080": "16:9",
+    "1:1": "1:1", "3:4": "3:4", "4:3": "4:3", "9:16": "9:16", "16:9": "16:9",
 }
+
+
+def _normalize_aspect(size_code: str) -> str:
+    v = _SIZE_TO_ASPECT.get(size_code) or (size_code if ":" in str(size_code) else "1:1")
+    return v if v in ("1:1", "3:4", "4:3", "9:16", "16:9") else "1:1"
 
 
 class NanoBananaClient:
@@ -33,9 +40,10 @@ class NanoBananaClient:
 
     async def generate_image(self, user_id: int, final_prompt: str, images: list[bytes], size_code: str) -> bytes:
         """Generate image via Google Imagen API. Reference images are not sent (Imagen text-only format)."""
-        aspect = _SIZE_TO_ASPECT.get(size_code, size_code if ":" in str(size_code) else "1:1")
+        aspect = _normalize_aspect(size_code)
+        prompt_trimmed = (final_prompt or "")[:480]
         payload = {
-            "instances": [{"prompt": final_prompt}],
+            "instances": [{"prompt": prompt_trimmed}],
             "parameters": {"sampleCount": 1, "aspectRatio": aspect},
         }
         api_key = await get_api_key(user_id, "nanobanana")
@@ -48,10 +56,28 @@ class NanoBananaClient:
                 async with httpx.AsyncClient(timeout=self._timeout_sec) as client:
                     response = await client.post(url, json=payload, headers=headers)
                 if response.status_code == 429 or response.status_code >= 500:
-                    raise NanoBananaError(f"transient_response_status={response.status_code}")
+                    body_full = response.text[:2000]
+                    logger.warning(
+                        "Imagen API 429/5xx | status=%s | attempt=%s | response=%s",
+                        response.status_code, attempt, body_full,
+                        extra={"status": response.status_code, "attempt": attempt, "response_body": body_full},
+                    )
+                    last_error = NanoBananaError(f"status={response.status_code} body={body_full[:1000]}")
+                    if attempt < self._retries:
+                        await asyncio.sleep(5 * (2 ** (attempt - 1)))
+                    continue
                 if response.status_code >= 400:
-                    err_body = response.text[:500]
-                    logger.warning("Imagen API error", extra={"status": response.status_code, "body": err_body})
+                    body_full = response.text[:2000]
+                    logger.warning(
+                        "Imagen API 4xx | status=%s | attempt=%s | request_payload=%s | response=%s",
+                        response.status_code, attempt, str(payload)[:800], body_full,
+                        extra={
+                            "status": response.status_code,
+                            "attempt": attempt,
+                            "request_payload": payload,
+                            "response_body": body_full,
+                        },
+                    )
                     response.raise_for_status()
 
                 data = response.json()
@@ -59,13 +85,17 @@ class NanoBananaClient:
                 if not predictions or not isinstance(predictions, list):
                     raise NanoBananaError("missing or invalid predictions in response")
                 pred = predictions[0]
-                image_b64 = pred.get("bytesBase64Encoded")
-                if not image_b64:
-                    image_b64 = pred.get("image_b64")
+                image_b64 = pred.get("bytesBase64Encoded") or pred.get("image_b64")
                 if not image_b64:
                     raise NanoBananaError("missing image bytes in prediction")
                 return base64.b64decode(image_b64)
-            except httpx.HTTPStatusError:
+            except httpx.HTTPStatusError as exc:
+                body_full = (exc.response.text if exc.response else "")[:2000]
+                logger.warning(
+                    "Imagen HTTPStatusError | status=%s | response=%s",
+                    exc.response.status_code if exc.response else None, body_full,
+                    extra={"response_body": body_full},
+                )
                 raise
             except Exception as exc:
                 last_error = exc

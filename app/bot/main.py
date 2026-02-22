@@ -249,10 +249,14 @@ def camera_main_inline() -> InlineKeyboardMarkup:
 
 
 def try_detect_face(path: Path) -> bool | None:
+    """Detect if image contains a face. Returns True/False, or None if detection unavailable (fallback = allow save)."""
     try:
         import cv2
         import mediapipe as mp
-
+    except ImportError as e:
+        logger.warning("Face detection skipped (missing deps: opencv-python-headless, mediapipe): %s", e)
+        return None
+    try:
         image = cv2.imread(str(path))
         if image is None:
             return None
@@ -260,8 +264,8 @@ def try_detect_face(path: Path) -> bool | None:
         with mp.solutions.face_detection.FaceDetection(model_selection=0, min_detection_confidence=0.5) as detector:
             result = detector.process(rgb)
         return bool(result.detections)
-    except Exception:
-        logger.exception("Face detection unavailable")
+    except Exception as e:
+        logger.warning("Face detection failed for %s: %s", path, e)
         return None
 
 
