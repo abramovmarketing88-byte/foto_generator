@@ -56,6 +56,7 @@ MAIN_MENU = ReplyKeyboardMarkup(
         [KeyboardButton(text="Сцена"), KeyboardButton(text="Камера")],
         [KeyboardButton(text="Генерация"), KeyboardButton(text="История")],
         [KeyboardButton(text="Помощь"), KeyboardButton(text="Показать профиль")],
+        [KeyboardButton(text="API ключи")],
     ],
     resize_keyboard=True,
 )
@@ -232,6 +233,51 @@ async def on_help_cmd(message: Message, app_ctx: AppContext) -> None:
 async def on_help(message: Message, app_ctx: AppContext) -> None:
     _get_user(app_ctx, message.from_user.id)
     await message.answer("Заполните профиль, загрузите минимум 1 фото лица, добавьте сцену и запустите генерацию.")
+
+
+@router.message(F.text == "API ключи")
+@with_error_handling
+async def api_keys_menu(message: Message, app_ctx: AppContext) -> None:
+    _get_user(app_ctx, message.from_user.id)
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Gemini (анализ и Imagen)", callback_data="api_help:gemini")],
+            [InlineKeyboardButton(text="NanoBanana (генерация)", callback_data="api_help:nanobanana")],
+        ]
+    )
+    await message.answer(
+        "Для генерации фотографий нужны API ключи.\n"
+        "Выберите сервис или используйте команды:\n"
+        "• /set_gemini <ключ> — для Gemini (Google)\n"
+        "• /set_nanobanana <ключ> — для NanoBanana",
+        reply_markup=kb,
+    )
+
+
+@router.callback_query(F.data.startswith("api_help:"))
+@with_error_handling
+async def api_help_callback(callback: CallbackQuery, app_ctx: AppContext) -> None:
+    provider = (callback.data or "").replace("api_help:", "", 1)
+    if provider == "gemini":
+        text = (
+            "🔑 Gemini API key (Google AI)\n\n"
+            "1. Откройте https://aistudio.google.com/apikey\n"
+            "2. Создайте ключ\n"
+            "3. Отправьте в чат:\n"
+            "<code>/set_gemini ВАШ_КЛЮЧ</code>"
+        )
+    elif provider == "nanobanana":
+        text = (
+            "🔑 NanoBanana API key\n\n"
+            "1. Получите ключ у провайдера NanoBanana\n"
+            "2. Отправьте в чат:\n"
+            "<code>/set_nanobanana ВАШ_КЛЮЧ</code>"
+        )
+    else:
+        text = "Неизвестный сервис."
+    await callback.answer()
+    if callback.message:
+        await callback.message.answer(text, parse_mode="HTML")
 
 
 @router.message(Command("set_gemini"))
@@ -448,6 +494,9 @@ async def on_camera_callback(callback: CallbackQuery, app_ctx: AppContext) -> No
     if callback.data == "noop":
         await callback.answer()
         return
+    if not callback.message:
+        await callback.answer("Сообщение недоступно", show_alert=True)
+        return
     user_id = _get_user(app_ctx, callback.from_user.id)
     key, value = (callback.data or "").split(":", 1)
     payload = {}
@@ -473,9 +522,13 @@ async def on_camera_callback(callback: CallbackQuery, app_ctx: AppContext) -> No
         repo.update_shoot_settings(user_id, **payload)
         settings = repo.get_or_create_shoot_settings(user_id)
 
-    await callback.message.edit_reply_markup(
-        reply_markup=camera_inline({"lens_selected": settings.lens_selected, "lens_mm": settings.lens_mm})
-    )
+    try:
+        await callback.message.edit_reply_markup(
+            reply_markup=camera_inline({"lens_selected": settings.lens_selected, "lens_mm": settings.lens_mm})
+        )
+    except Exception as e:
+        if "not modified" not in str(e).lower():
+            logger.warning("Failed to edit camera markup: %s", e)
     await callback.answer("Сохранено")
 
 
