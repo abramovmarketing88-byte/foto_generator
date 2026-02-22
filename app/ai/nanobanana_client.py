@@ -17,41 +17,52 @@ class NanoBananaError(RuntimeError):
 
 
 class NanoBananaClient:
+    """Imagen (Google Gemini Image Generation) client via generativelanguage API."""
+
     def __init__(self, settings: Settings):
-        self._endpoint = "https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-001:predict"
+        self._endpoint = "https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict"
         self._timeout_sec = settings.nanobanana_timeout_sec
         self._retries = settings.nanobanana_retries
 
     async def generate_image(self, user_id: int, final_prompt: str, images: list[bytes], size_code: str) -> bytes:
+        """Generate image via Google Imagen API. Reference images are not sent (Imagen text-only format)."""
         payload = {
-            "prompt": final_prompt,
-            "size_code": size_code,
-            "reference_images": [base64.b64encode(image).decode("ascii") for image in images],
+            "instances": [{"prompt": final_prompt}],
+            "parameters": {"sampleCount": 1},
         }
         api_key = await get_api_key(user_id, "nanobanana")
         url = f"{self._endpoint}?key={api_key}"
+        headers = {"Content-Type": "application/json", "x-goog-api-key": api_key}
 
         last_error: Exception | None = None
         for attempt in range(1, self._retries + 1):
             try:
                 async with httpx.AsyncClient(timeout=self._timeout_sec) as client:
-                    response = await client.post(url, json=payload)
+                    response = await client.post(url, json=payload, headers=headers)
                 if response.status_code == 429 or response.status_code >= 500:
                     raise NanoBananaError(f"transient_response_status={response.status_code}")
-                response.raise_for_status()
+                if response.status_code >= 400:
+                    err_body = response.text[:500]
+                    logger.warning("Imagen API error", extra={"status": response.status_code, "body": err_body})
+                    response.raise_for_status()
 
-                content_type = response.headers.get("content-type", "")
-                if "application/json" in content_type:
-                    data = response.json()
-                    image_b64 = data.get("image_b64")
-                    if not image_b64:
-                        raise NanoBananaError("missing image_b64 in response")
-                    return base64.b64decode(image_b64)
-                return response.content
+                data = response.json()
+                predictions = data.get("predictions")
+                if not predictions or not isinstance(predictions, list):
+                    raise NanoBananaError("missing or invalid predictions in response")
+                pred = predictions[0]
+                image_b64 = pred.get("bytesBase64Encoded")
+                if not image_b64:
+                    image_b64 = pred.get("image_b64")
+                if not image_b64:
+                    raise NanoBananaError("missing image bytes in prediction")
+                return base64.b64decode(image_b64)
+            except httpx.HTTPStatusError:
+                raise
             except Exception as exc:
                 last_error = exc
                 if attempt < self._retries:
                     await asyncio.sleep(2 ** (attempt - 1))
 
-        logger.exception("NanoBanana generation failed after retries")
-        raise NanoBananaError("nanobanana_generation_failed") from last_error
+        logger.exception("Imagen generation failed after retries")
+        raise NanoBananaError("imagen_generation_failed") from last_error
