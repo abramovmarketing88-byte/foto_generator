@@ -19,7 +19,7 @@ class OpenRouterError(RuntimeError):
 class OpenRouterClient:
     def __init__(self, settings: Settings):
         self._endpoint = "https://openrouter.ai/api/v1/chat/completions"
-        self._timeout_sec = settings.nanobanana_timeout_sec
+        self._timeout_sec = max(settings.nanobanana_timeout_sec, 120)
         self._retries = settings.nanobanana_retries
 
     async def generate_image(self, user_id: int, final_prompt: str, images: list[bytes], size_code: str) -> bytes:

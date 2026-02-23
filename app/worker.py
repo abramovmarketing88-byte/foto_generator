@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 
 from aiogram import Bot
-from aiogram.types import BufferedInputFile
+from aiogram.types import BufferedInputFile, KeyboardButton, ReplyKeyboardMarkup
 from sqlalchemy.orm import sessionmaker
 
 from app.ai.gemini_analyzer import GeminiAnalyzer, GeminiQuotaExceededError
@@ -24,6 +24,14 @@ logger = logging.getLogger(__name__)
 
 class ReferencePhotosExpiredError(RuntimeError):
     """Raised when photo paths are present in DB, but files are gone on disk."""
+
+
+
+def _reload_profile_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="Перезагрузить фото")], [KeyboardButton(text="Профиль")]],
+        resize_keyboard=True,
+    )
 
 
 def _generation_caption(lens_selected: bool, lens_mm: int | None, angle_code: str, size_code: str) -> str:
@@ -141,7 +149,8 @@ async def run_worker(bot: Bot, settings: Settings, session_factory: sessionmaker
                     NeuroPhotoshootRepo(session).mark_job_failed(job.id, "reference photos missing on disk")
                 await bot.send_message(
                     user.telegram_user_id,
-                    "⚠️ Фото недоступны на сервере (возможно, перезапуск). Загрузите фото заново в меню «Фото».",
+                    "⚠️ Фото недоступны на сервере (возможно, перезапуск). Нажмите «Перезагрузить фото», чтобы перейти в меню «Профиль».",
+                    reply_markup=_reload_profile_keyboard(),
                 )
                 continue
             if user:
@@ -150,7 +159,7 @@ async def run_worker(bot: Bot, settings: Settings, session_factory: sessionmaker
             try:
                 await asyncio.wait_for(
                     _run_job(job.id, bot, settings, session_factory, storage, gemini, nanobanana, openrouter),
-                    timeout=settings.job_timeout_sec,
+                    timeout=max(settings.job_timeout_sec, 120),
                 )
             except Exception as exc:
                 error_text = str(exc)[:1000]
@@ -175,7 +184,8 @@ async def run_worker(bot: Bot, settings: Settings, session_factory: sessionmaker
                     elif isinstance(exc, ReferencePhotosExpiredError):
                         await bot.send_message(
                             user.telegram_user_id,
-                            "⚠️ Фото недоступны после перезапуска сервера. Загрузите фото заново в меню «Фото».",
+                            "⚠️ Фото недоступны после перезапуска сервера. Нажмите «Перезагрузить фото», чтобы перейти в меню «Профиль».",
+                            reply_markup=_reload_profile_keyboard(),
                         )
                     elif isinstance(exc, GeminiQuotaExceededError):
                         await bot.send_message(
