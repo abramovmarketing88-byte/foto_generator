@@ -530,6 +530,12 @@ def _format_profile_prompt(profile: object | None) -> str:
     return ", ".join(parts) if parts else ""
 
 
+
+@router.message(F.text == "Перезагрузить фото")
+@with_error_handling
+async def reload_photos(message: Message, state: FSMContext, app_ctx: AppContext) -> None:
+    await ask_profile(message, state, app_ctx)
+
 @router.message(F.text == "Профиль")
 @with_error_handling
 async def ask_profile(message: Message, state: FSMContext, app_ctx: AppContext) -> None:
@@ -924,8 +930,11 @@ async def generate(message: Message, app_ctx: AppContext) -> None:
                 },
             )
             await message.answer(
-                "⚠️ Часть фото недоступна после перезапуска сервера. "
-                "Пожалуйста, заново загрузите фото в меню «Фото»."
+                "⚠️ Часть фото недоступна после перезапуска сервера. Нажмите «Перезагрузить фото», чтобы перейти в меню «Профиль».",
+                reply_markup=ReplyKeyboardMarkup(
+                    keyboard=[[KeyboardButton(text="Перезагрузить фото")], [KeyboardButton(text="Профиль")]],
+                    resize_keyboard=True,
+                ),
             )
             return
 
