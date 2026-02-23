@@ -130,5 +130,7 @@ class UserKeys(Base):
     __tablename__ = "user_keys"
 
     user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    active_provider: Mapped[str] = mapped_column(String(32), default="google", nullable=False)
     gemini_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
     nanobanana_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    openrouter_key: Mapped[str | None] = mapped_column(String(1024), nullable=True)
