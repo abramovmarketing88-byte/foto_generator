@@ -159,7 +159,7 @@ async def run_worker(bot: Bot, settings: Settings, session_factory: sessionmaker
             try:
                 await asyncio.wait_for(
                     _run_job(job.id, bot, settings, session_factory, storage, gemini, nanobanana, openrouter),
-                    timeout=max(settings.job_timeout_sec, 120),
+                    timeout=max(settings.job_timeout_sec, 200),
                 )
             except Exception as exc:
                 error_text = str(exc)[:1000]
@@ -199,6 +199,12 @@ async def run_worker(bot: Bot, settings: Settings, session_factory: sessionmaker
                             "⚠️ Imagen доступен только с платным аккаунтом Google Cloud. Подключите биллинг:\n"
                             "https://console.cloud.google.com/billing",
                         )
+                    elif isinstance(exc, TimeoutError):
+                        logger.error(
+                            "OpenRouter took longer than 180s to respond",
+                            extra={"job_id": job.id, "user_id": job.user_id},
+                        )
+                        await bot.send_message(user.telegram_user_id, f"Не удалось выполнить генерацию для задачи #{job.id}. Попробуйте позже.")
                     else:
                         await bot.send_message(user.telegram_user_id, f"Не удалось выполнить генерацию для задачи #{job.id}. Попробуйте позже.")
                 logger.exception(

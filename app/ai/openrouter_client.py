@@ -19,7 +19,7 @@ class OpenRouterError(RuntimeError):
 class OpenRouterClient:
     def __init__(self, settings: Settings):
         self._endpoint = "https://openrouter.ai/api/v1/chat/completions"
-        self._timeout_sec = max(settings.nanobanana_timeout_sec, 120)
+        self._timeout = httpx.Timeout(180.0, read=180.0)
         self._retries = settings.nanobanana_retries
 
     async def generate_image(self, user_id: int, final_prompt: str, images: list[bytes], size_code: str) -> bytes:
@@ -42,7 +42,7 @@ class OpenRouterClient:
         last_error: Exception | None = None
         for attempt in range(1, self._retries + 1):
             try:
-                async with httpx.AsyncClient(timeout=self._timeout_sec) as client:
+                async with httpx.AsyncClient(timeout=self._timeout) as client:
                     response = await client.post(self._endpoint, json=payload, headers=headers)
                 if response.status_code == 429 or response.status_code >= 500:
                     body = response.text[:1500]
@@ -61,7 +61,7 @@ class OpenRouterClient:
                 )
                 if not image_url:
                     raise OpenRouterError("missing image_url in response")
-                async with httpx.AsyncClient(timeout=self._timeout_sec) as client:
+                async with httpx.AsyncClient(timeout=self._timeout) as client:
                     image_response = await client.get(image_url)
                 image_response.raise_for_status()
                 return image_response.content
