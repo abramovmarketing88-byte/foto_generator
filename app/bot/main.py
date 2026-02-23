@@ -22,7 +22,7 @@ from app.db import create_session_factory
 from app.logging_setup import setup_logging
 from app.models import Base, PhotoKind
 from app.repo import NeuroPhotoshootRepo
-from app.services.keys import MissingKeyError, configure_keys_service, get_api_key
+from app.services.keys import MissingKeyError, configure_keys_service, get_active_provider, get_api_key
 from app.storage import LocalStorage
 from app.worker import run_worker
 
@@ -50,6 +50,7 @@ class ProfileState(StatesGroup):
 class ApiKeyState(StatesGroup):
     waiting_gemini_key = State()
     waiting_nanobanana_key = State()
+    waiting_openrouter_key = State()
 
 
 class PhotoState(StatesGroup):
@@ -130,7 +131,7 @@ def with_error_handling(func: Callable[..., Coroutine[None, None, T]]) -> Callab
         except MissingKeyError:
             logger.warning("Missing API key for handler | context=%s", context)
             if _can_reply(event):
-                await event.answer("⚠️ API-ключ не найден. Используйте /set_gemini или /set_nanobanana (см. «API ключи» в меню).")
+                await event.answer("⚠️ API-ключ не найден. Откройте меню «API ключи», выберите провайдера и задайте ключ.")
             return None
         except Exception:
             logger.exception("Handler error | context=%s", context)
@@ -312,18 +313,48 @@ async def on_help(message: Message, app_ctx: AppContext) -> None:
 @with_error_handling
 async def api_keys_menu(message: Message, app_ctx: AppContext) -> None:
     _get_user(app_ctx, message.from_user.id)
+    with app_ctx.session_factory() as session:
+        repo = NeuroPhotoshootRepo(session)
+        user_keys = repo.get_or_create_user_keys(message.from_user.id)
+        active_provider = user_keys.active_provider or "google"
+
+    provider_label = "Google Native (Gemini/Vertex)" if active_provider == "google" else "OpenRouter"
+    key_buttons = [
+        [InlineKeyboardButton(text="Установить ключ Gemini", callback_data="api_set:gemini")],
+        [InlineKeyboardButton(text="Установить ключ Google Imagen", callback_data="api_set:nanobanana")],
+    ]
+    if active_provider == "openrouter":
+        key_buttons.append([InlineKeyboardButton(text="Установить ключ OpenRouter", callback_data="api_set:openrouter")])
+
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Установить ключ Gemini", callback_data="api_set:gemini")],
-            [InlineKeyboardButton(text="Установить ключ Imagen", callback_data="api_set:nanobanana")],
+            [InlineKeyboardButton(text="Использовать Google Native (Gemini/Vertex)", callback_data="api_provider:google")],
+            [InlineKeyboardButton(text="Использовать OpenRouter", callback_data="api_provider:openrouter")],
+            *key_buttons,
             [InlineKeyboardButton(text="Справка: Gemini", callback_data="api_help:gemini")],
             [InlineKeyboardButton(text="Справка: Imagen", callback_data="api_help:nanobanana")],
+            [InlineKeyboardButton(text="Справка: OpenRouter", callback_data="api_help:openrouter")],
         ]
     )
     await message.answer(
-        "Управление API ключами. Выберите действие:",
+        f"Управление API ключами.\nАктивный провайдер: {provider_label}\n\nВыберите действие:",
         reply_markup=kb,
     )
+
+
+@router.callback_query(F.data.startswith("api_provider:"))
+@with_error_handling
+async def api_provider_callback(callback: CallbackQuery, app_ctx: AppContext) -> None:
+    provider = (callback.data or "").replace("api_provider:", "", 1).strip().lower()
+    if provider not in {"google", "openrouter"}:
+        await callback.answer("Неизвестный провайдер", show_alert=True)
+        return
+    with app_ctx.session_factory() as session:
+        NeuroPhotoshootRepo(session).set_active_provider(callback.from_user.id, provider)
+    label = "Google Native (Gemini/Vertex)" if provider == "google" else "OpenRouter"
+    await callback.answer(f"Активный провайдер: {label}")
+    if callback.message:
+        await callback.message.answer(f"✅ Выбран провайдер: {label}.")
 
 
 @router.callback_query(F.data.startswith("api_set:"))
@@ -339,6 +370,9 @@ async def api_set_callback(callback: CallbackQuery, state: FSMContext, app_ctx: 
     elif provider == "nanobanana":
         await state.set_state(ApiKeyState.waiting_nanobanana_key)
         await callback.message.answer("Отправьте ваш Imagen API ключ в следующем сообщении.")
+    elif provider == "openrouter":
+        await state.set_state(ApiKeyState.waiting_openrouter_key)
+        await callback.message.answer("Отправьте ваш OpenRouter API ключ в следующем сообщении.")
     else:
         await callback.answer("Неизвестный сервис", show_alert=True)
         return
@@ -375,6 +409,21 @@ async def save_nanobanana_key_from_state(message: Message, state: FSMContext, ap
     await message.answer("Ключ Imagen сохранён.", reply_markup=MAIN_MENU)
 
 
+@router.message(ApiKeyState.waiting_openrouter_key, F.text)
+@with_error_handling
+async def save_openrouter_key_from_state(message: Message, state: FSMContext, app_ctx: AppContext) -> None:
+    if not message.from_user:
+        return
+    key = (message.text or "").strip()
+    if not key:
+        await message.answer("Ключ не может быть пустым. Попробуйте снова.")
+        return
+    with app_ctx.session_factory() as session:
+        NeuroPhotoshootRepo(session).upsert_openrouter_key(message.from_user.id, key)
+    await state.clear()
+    await message.answer("Ключ OpenRouter сохранён.", reply_markup=MAIN_MENU)
+
+
 @router.callback_query(F.data.startswith("api_help:"))
 @with_error_handling
 async def api_help_callback(callback: CallbackQuery, app_ctx: AppContext) -> None:
@@ -397,6 +446,14 @@ async def api_help_callback(callback: CallbackQuery, app_ctx: AppContext) -> Non
             "4. Отправьте в чат:\n"
             "<code>/set_nanobanana ВАШ_КЛЮЧ</code>\n\n"
             "Документация: https://cloud.google.com/vertex-ai/docs/generative-ai/image/generate-images"
+        )
+    elif provider == "openrouter":
+        text = (
+            "🔑 OpenRouter\n\n"
+            "1. Откройте https://openrouter.ai/keys\n"
+            "2. Создайте API-ключ\n"
+            "3. Отправьте в чат:\n"
+            "<code>/set_openrouter ВАШ_КЛЮЧ</code>"
         )
     else:
         text = "Неизвестный сервис."
@@ -435,6 +492,22 @@ async def set_nanobanana_key(message: Message, app_ctx: AppContext) -> None:
     with app_ctx.session_factory() as session:
         NeuroPhotoshootRepo(session).upsert_nanobanana_key(message.from_user.id, parts[1].strip())
     await message.answer("Ключ Imagen (генерация) сохранён.")
+
+
+@router.message(Command("set_openrouter"))
+@with_error_handling
+async def set_openrouter_key(message: Message, app_ctx: AppContext) -> None:
+    if not message.from_user:
+        await message.answer("Пользователь не определен.")
+        return
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip():
+        await message.answer("Использование: /set_openrouter <API_KEY>")
+        return
+
+    with app_ctx.session_factory() as session:
+        NeuroPhotoshootRepo(session).upsert_openrouter_key(message.from_user.id, parts[1].strip())
+    await message.answer("Ключ OpenRouter сохранён.")
 
 
 def _format_profile_prompt(profile: object | None) -> str:
@@ -802,9 +875,18 @@ async def generate(message: Message, app_ctx: AppContext) -> None:
     if not message.from_user:
         await message.answer("Пользователь не определен.")
         return
-
-    await get_api_key(message.from_user.id, "gemini")
-    await get_api_key(message.from_user.id, "nanobanana")
+    active_provider = await get_active_provider(message.from_user.id)
+    if active_provider == "google":
+        await get_api_key(message.from_user.id, "gemini")
+        await get_api_key(message.from_user.id, "nanobanana")
+    elif active_provider == "openrouter":
+        try:
+            await get_api_key(message.from_user.id, "openrouter")
+        except MissingKeyError:
+            await message.answer(
+                "⚠️ Вы выбрали OpenRouter, но ключ не задан. Нажмите «API ключи» → «Установить ключ OpenRouter»."
+            )
+            return
 
     user_id = _get_user(app_ctx, message.from_user.id)
     with app_ctx.session_factory() as session:
@@ -941,6 +1023,20 @@ async def main() -> None:
                 session.rollback()
                 if "duplicate column" not in str(e).lower() and "already exists" not in str(e).lower():
                     logger.warning("Profile migration for %s failed: %s", col, e)
+        for col, typ, default in [
+            ("active_provider", "VARCHAR(32)", "'google'"),
+            ("openrouter_key", "VARCHAR(1024)", None),
+        ]:
+            try:
+                session.execute(text(f"ALTER TABLE user_keys ADD COLUMN {col} {typ}"))  # noqa: S608
+                if default is not None:
+                    session.execute(text(f"UPDATE user_keys SET {col} = {default} WHERE {col} IS NULL"))  # noqa: S608
+                    session.execute(text(f"ALTER TABLE user_keys ALTER COLUMN {col} SET DEFAULT {default}"))  # noqa: S608
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                if "duplicate column" not in str(e).lower() and "already exists" not in str(e).lower():
+                    logger.warning("User keys migration for %s failed: %s", col, e)
 
     app_ctx = AppContext(settings=settings, session_factory=session_factory, storage=storage)
 

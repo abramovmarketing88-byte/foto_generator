@@ -10,12 +10,13 @@ from sqlalchemy.orm import sessionmaker
 
 from app.ai.gemini_analyzer import GeminiAnalyzer, GeminiQuotaExceededError
 from app.ai.nanobanana_client import ImagenBillingRequiredError, NanoBananaClient
+from app.ai.openrouter_client import OpenRouterClient
 from app.config import Settings
 from app.models import JobStatus, PhotoKind
 from app.prompt_builder import build_final_prompt
 from app.queue import JobQueue
 from app.repo import NeuroPhotoshootRepo
-from app.services.keys import MissingKeyError
+from app.services.keys import MissingKeyError, get_active_provider
 from app.storage import LocalStorage
 
 logger = logging.getLogger(__name__)
@@ -38,6 +39,7 @@ async def _run_job(
     storage: LocalStorage,
     gemini: GeminiAnalyzer,
     nanobanana: NanoBananaClient,
+    openrouter: OpenRouterClient,
 ) -> None:
     with session_factory() as session:
         repo = NeuroPhotoshootRepo(session)
@@ -66,9 +68,13 @@ async def _run_job(
     face_bytes = [path.read_bytes() for path in face_paths]
     ref_bytes = [path.read_bytes() for path in ref_paths]
 
-    face_signature_text, warnings = await gemini.analyze_user_photos(user.telegram_user_id, face_bytes)
-    if warnings:
-        logger.info("Gemini analysis warnings", extra={"job_id": job_id, "warnings_count": len(warnings)})
+    active_provider = await get_active_provider(user.telegram_user_id)
+
+    face_signature_text = ""
+    if active_provider == "google":
+        face_signature_text, warnings = await gemini.analyze_user_photos(user.telegram_user_id, face_bytes)
+        if warnings:
+            logger.info("Gemini analysis warnings", extra={"job_id": job_id, "warnings_count": len(warnings)})
 
     final_prompt = build_final_prompt(
         profile=profile,
@@ -79,7 +85,10 @@ async def _run_job(
     )
     logger.info("Final prompt built", extra={"job_id": job_id, "prompt": final_prompt})
 
-    image_bytes = await nanobanana.generate_image(user.telegram_user_id, final_prompt, ref_bytes, shoot_settings.output_size_code)
+    if active_provider == "openrouter":
+        image_bytes = await openrouter.generate_image(user.telegram_user_id, final_prompt, ref_bytes, shoot_settings.output_size_code)
+    else:
+        image_bytes = await nanobanana.generate_image(user.telegram_user_id, final_prompt, ref_bytes, shoot_settings.output_size_code)
 
     result_path = storage.build_result_path(job.user_id, job_id, extension=".jpg")
     result_path.write_bytes(image_bytes)
@@ -105,6 +114,7 @@ async def run_worker(bot: Bot, settings: Settings, session_factory: sessionmaker
     queue = JobQueue(session_factory)
     gemini = GeminiAnalyzer(settings)
     nanobanana = NanoBananaClient(settings)
+    openrouter = OpenRouterClient(settings)
 
     failed_on_startup = queue.fail_running_jobs_on_startup("service restart")
     if failed_on_startup:
@@ -139,7 +149,7 @@ async def run_worker(bot: Bot, settings: Settings, session_factory: sessionmaker
 
             try:
                 await asyncio.wait_for(
-                    _run_job(job.id, bot, settings, session_factory, storage, gemini, nanobanana),
+                    _run_job(job.id, bot, settings, session_factory, storage, gemini, nanobanana, openrouter),
                     timeout=settings.job_timeout_sec,
                 )
             except Exception as exc:
@@ -152,9 +162,15 @@ async def run_worker(bot: Bot, settings: Settings, session_factory: sessionmaker
                     user = repo.get_user_by_id(job.user_id)
                 if user:
                     if isinstance(exc, MissingKeyError):
+                        provider_labels = {
+                            "openrouter": "OpenRouter",
+                            "nanobanana": "Google Native (Imagen)",
+                            "gemini": "Google Native (Gemini)",
+                        }
+                        missing_provider = provider_labels.get(exc.provider, exc.provider)
                         await bot.send_message(
                             user.telegram_user_id,
-                            "⚠️ API-ключ не найден. Укажите ключ в меню «API ключи».",
+                            f"⚠️ Не найден API-ключ для {missing_provider}. Укажите ключ в меню «API ключи».",
                         )
                     elif isinstance(exc, ReferencePhotosExpiredError):
                         await bot.send_message(

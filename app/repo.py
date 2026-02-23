@@ -4,6 +4,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, aliased
 
 from app.models import Generation, Job, JobStatus, PhotoAsset, PhotoKind, Profile, ScenePrompt, ShootSettings, User, UserKeys
+from app.security import encrypt_secret
 
 
 class NeuroPhotoshootRepo:
@@ -256,22 +257,46 @@ class NeuroPhotoshootRepo:
     def get_user_keys(self, user_id: int) -> UserKeys | None:
         return self.session.get(UserKeys, user_id)
 
-    def upsert_gemini_key(self, user_id: int, key: str) -> UserKeys:
+    def get_or_create_user_keys(self, user_id: int) -> UserKeys:
         user_keys = self.get_user_keys(user_id)
         if user_keys is None:
-            user_keys = UserKeys(user_id=user_id)
+            user_keys = UserKeys(user_id=user_id, active_provider="google")
             self.session.add(user_keys)
+        return user_keys
+
+    def upsert_gemini_key(self, user_id: int, key: str) -> UserKeys:
+        user_keys = self.get_or_create_user_keys(user_id)
         user_keys.gemini_key = key
         self.session.commit()
         self.session.refresh(user_keys)
         return user_keys
 
     def upsert_nanobanana_key(self, user_id: int, key: str) -> UserKeys:
-        user_keys = self.get_user_keys(user_id)
-        if user_keys is None:
-            user_keys = UserKeys(user_id=user_id)
-            self.session.add(user_keys)
+        user_keys = self.get_or_create_user_keys(user_id)
         user_keys.nanobanana_key = key
         self.session.commit()
         self.session.refresh(user_keys)
         return user_keys
+
+    def upsert_openrouter_key(self, user_id: int, key: str) -> UserKeys:
+        user_keys = self.get_or_create_user_keys(user_id)
+        user_keys.openrouter_key = encrypt_secret(key)
+        self.session.commit()
+        self.session.refresh(user_keys)
+        return user_keys
+
+    def set_active_provider(self, user_id: int, provider: str) -> UserKeys:
+        normalized = provider.strip().lower()
+        if normalized not in {"google", "openrouter"}:
+            raise ValueError(f"unsupported_provider:{provider}")
+        user_keys = self.get_or_create_user_keys(user_id)
+        user_keys.active_provider = normalized
+        self.session.commit()
+        self.session.refresh(user_keys)
+        return user_keys
+
+    def get_active_provider(self, user_id: int) -> str:
+        user_keys = self.get_user_keys(user_id)
+        if not user_keys or not user_keys.active_provider:
+            return "google"
+        return user_keys.active_provider
